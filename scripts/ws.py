@@ -61,30 +61,47 @@ def send_ws_frame(sock, payload, opcode=0x2):
 
 def ws_to_ssh(client):
     # --- handshake HTTP Upgrade ---
-    # Kompatibel FighterTunnel & payload bug-host/split: baca request secukupnya
-    # (jangan blokir lama), lalu SELALU jawab 101 seperti proxy FT.
-    # Alasan: payload bug-host mengirim request decoy dulu (tanpa header Upgrade)
-    # baru request WS-nya secara pipelining; proxy HTTP di depan (nginx/haproxy)
-    # hanya meneruskan request pertama. Validasi ketat = 400 = klien gagal konek.
+    # Smart: cari header Upgrade: websocket di SELURUH data yang diterima
+    # (handle pipelining bug-host). Ketemu -> 101 (dummy accept kalau tanpa key).
+    # Tidak ketemu -> 400 (bukan klien WS).
+    # Catatan: via haproxy:80 (HTTP mode), hanya request pertama yang diteruskan,
+    # jadi bug-host pipelining hanya jalan via 443 (Xray teruskan raw TCP).
     req = b""
-    client.settimeout(2)
+    client.settimeout(5)
+    while b"\r\n\r\n" not in req:
+        try:
+            chunk = client.recv(4096)
+        except (socket.timeout, OSError):
+            break
+        if not chunk:
+            break
+        req += chunk
+        if len(req) > 16384:
+            break
+    # Tunggu sebentar untuk segmen split/pipelining (khusus 443 via Xray)
+    client.settimeout(0.5)
     try:
-        while b"\r\n\r\n" not in req:
+        while True:
             chunk = client.recv(4096)
             if not chunk:
                 break
             req += chunk
-            if len(req) > 16384:
+            if len(req) > 16384 or b"websocket" in req.lower():
                 break
     except (socket.timeout, OSError):
         pass
     client.settimeout(None)
-    # Cari key kalau ada (biar accept valid), kalau tidak pakai dummy.
     key = None
+    has_upgrade = False
     for line in req.decode("latin1").split("\r\n"):
-        if line.lower().startswith("sec-websocket-key:"):
+        ll = line.lower()
+        if ll.startswith("sec-websocket-key:"):
             key = line.split(":", 1)[1].strip()
-            break
+        elif ll.startswith("upgrade:") and "websocket" in ll:
+            has_upgrade = True
+    if not has_upgrade:
+        client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+        return
     if not key:
         key = "dGhlIHNhbXBsZSBub25jZQ=="  # dummy ala FighterTunnel
     accept = base64.b64encode(
