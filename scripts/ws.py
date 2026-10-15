@@ -78,15 +78,17 @@ def ws_to_ssh(client):
         req += chunk
         if len(req) > 16384:
             break
-    # Tunggu sebentar untuk segmen split/pipelining (khusus 443 via Xray)
-    client.settimeout(0.5)
+    # Tunggu segmen split/pipelining (khusus 443 via Xray).
+    # Bug-host payload pakai [split] yang jedanya bisa 1-3 detik, jadi tunggu
+    # sampai ketemu header Upgrade atau timeout 5 detik.
+    client.settimeout(5)
     try:
-        while True:
+        while b"websocket" not in req.lower():
             chunk = client.recv(4096)
             if not chunk:
                 break
             req += chunk
-            if len(req) > 16384 or b"websocket" in req.lower():
+            if len(req) > 16384:
                 break
     except (socket.timeout, OSError):
         pass
