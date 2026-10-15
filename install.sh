@@ -31,11 +31,11 @@ apt-get install -y -qq haproxy nginx curl wget unzip python3 \
 
 log "[2/10] Xray-core"
 if [ ! -x /usr/local/bin/xray ]; then
-  cd /tmp
+  (cd /tmp
   wget -q -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
   unzip -o -q xray.zip xray -d /tmp
   install -m 755 /tmp/xray /usr/local/bin/xray
-  rm -f /tmp/xray.zip /tmp/xray
+  rm -f /tmp/xray.zip /tmp/xray)
 fi
 /usr/local/bin/xray version | head -1
 mkdir -p /etc/xray/{edge,vmess,vless,trojan,shadowsocks,ssh}
