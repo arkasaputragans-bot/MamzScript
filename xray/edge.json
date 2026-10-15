@@ -49,6 +49,10 @@
             "dest": 10020
           },
           {
+            "path": "/fightertunnelssh",
+            "dest": 10020
+          },
+          {
             "dest": 10009
           }
         ]

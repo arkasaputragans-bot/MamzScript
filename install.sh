@@ -112,6 +112,7 @@ fi
 # migrasi: fallback /ssh-ws -> ws.py :10020 direct (SSH over WS via 443).
 # Catatan: fallback path-based Xray ke nginx :10009 terbukti bermasalah,
 # jadi canonical langsung ke ws.py; multipath tetap via nginx :10009 (catch-all).
+# Alias FighterTunnel /fightertunnelssh juga ditambahkan (migrasi seamless).
 EDGE_SSHWS="$(python3 -c "
 import json
 p = '/etc/xray/edge/config.json'
@@ -119,21 +120,23 @@ try:
     cfg = json.load(open(p))
     ib = cfg['inbounds'][0]
     fb = ib.get('settings', {}).get('fallbacks', [])
-    cur = next((f for f in fb if f.get('path') == '/ssh-ws'), None)
-    if cur and cur.get('dest') == 10020:
-        print('OK')
-    else:
-        if cur:
-            fb.remove(cur)
-        idx = next((i for i, f in enumerate(fb) if 'path' not in f), len(fb))
-        fb.insert(idx, {'path': '/ssh-ws', 'dest': 10020})
+    changed = False
+    for path in ('/ssh-ws', '/fightertunnelssh'):
+        cur = next((f for f in fb if f.get('path') == path), None)
+        if not cur or cur.get('dest') != 10020:
+            if cur:
+                fb.remove(cur)
+            idx = next((i for i, f in enumerate(fb) if 'path' not in f), len(fb))
+            fb.insert(idx, {'path': path, 'dest': 10020})
+            changed = True
+    if changed:
         json.dump(cfg, open(p, 'w'))
-        print('YES')
+    print('YES' if changed else 'OK')
 except Exception:
     pass
 " 2>/dev/null)"
 if [ "$EDGE_SSHWS" = "YES" ]; then
-  echo "  migrasi edge.json: fallback /ssh-ws -> :10020 ditambahkan, restart xray@edge"
+  echo "  migrasi edge.json: fallback /ssh-ws + /fightertunnelssh -> :10020, restart xray@edge"
   systemctl restart xray@edge
 fi
 
