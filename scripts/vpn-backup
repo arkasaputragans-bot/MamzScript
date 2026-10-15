@@ -7,8 +7,10 @@ Isi backup (relatif terhadap /):
   etc/xray/{domain,city,isp,ns_domain}, etc/vpn-panel/servers.db,
   MANIFEST.txt (info + jumlah akun per protokol).
 
-TIDAK ikut: api.key, bot.env, *.crt, *.key, config.json (rahasia / bisa
+TIDAK ikut: api.key, bot.env, *.crt, *.key, config.json (bisa
 dibangun ulang via `vpnctl resync`).
+IKUT: etc/shadow (hash password SSH) agar restore pakai password lama.
+Hanya untuk lingkungan sendiri.
 
 Hasil: /var/backups/vpn-panel/backup-YYYYMMDD-HHMMSS.tar.gz (rotasi: 7 terakhir).
 Kirim ke Telegram bila BOT_TOKEN & ADMIN_IDS terisi di /etc/vpn-panel/bot.env.
@@ -36,6 +38,9 @@ BACKUP_PATHS = [
     "etc/xray/shadowsocks", "etc/xray/ssh",
     "etc/xray/domain", "etc/xray/city", "etc/xray/isp", "etc/xray/ns_domain",
     "etc/vpn-panel/servers.db",
+    # Hash password SSH (etc/shadow) ikut di-backup agar restore bisa pakai
+    # password lama. Hanya untuk lingkungan sendiri, jangan disebar.
+    "etc/shadow",
 ]
 EXCLUDE_SUFFIX = (".crt", ".key")
 EXCLUDE_NAMES = {"api.key", "bot.env", "config.json", "netinfo.json"}
