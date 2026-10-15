@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Panel VPN</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login-view" class="view">
+  <div class="card login-card">
+    <h1>🛡️ Panel VPN</h1>
+    <p class="muted">Masuk dengan API key server</p>
+    <label>Host API
+      <input id="api-host" type="text" placeholder="contoh: 1.2.3.4/api atau 1.2.3.4:5888">
+    </label>
+    <label>API Key
+      <input id="api-key" type="password" placeholder="isi /etc/xray/api.key">
+    </label>
+    <button id="btn-login" class="btn primary">Masuk</button>
+    <p id="login-err" class="err"></p>
+  </div>
+</div>
+
+<div id="app-view" class="view hidden">
+  <header>
+    <h1>🛡️ Panel VPN</h1>
+    <nav>
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="akun">Akun</button>
+      <button class="tab" data-tab="server">Server</button>
+      <button id="btn-logout" class="tab right">Keluar</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-dashboard" class="tabpane">
+      <h2>Status Service</h2>
+      <div id="svc-grid" class="grid"></div>
+      <h2>Jumlah Akun</h2>
+      <div id="acct-grid" class="grid"></div>
+    </section>
+
+    <section id="tab-akun" class="tabpane hidden">
+      <div class="row">
+        <div id="proto-pills" class="pills"></div>
+      </div>
+      <div class="row">
+        <input id="acct-search" class="search" placeholder="🔍 Cari username..." oninput="renderAccounts()">
+        <span id="acct-count" class="muted"></span>
+        <button id="btn-create" class="btn primary" style="margin-left:auto">+ Buat Akun</button>
+      </div>
+      <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>Username</th><th>Expired</th><th>Aksi</th></tr></thead>
+        <tbody id="acct-body"></tbody>
+      </table>
+      </div>
+    </section>
+
+    <section id="tab-server" class="tabpane hidden">
+      <h2>Daftar Server</h2>
+      <table class="tbl">
+        <thead><tr><th>ID</th><th>Domain</th><th>Aksi</th></tr></thead>
+        <tbody id="srv-body"></tbody>
+      </table>
+      <h3>Tambah Server</h3>
+      <div class="row">
+        <input id="srv-domain" placeholder="domain / IP">
+        <input id="srv-auth" placeholder="auth key">
+        <button id="btn-addsrv" class="btn primary">Tambah</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="card" id="modal-card">
+    <h2 id="modal-title">Buat Akun</h2>
+    <div id="modal-fields"></div>
+    <div class="row end">
+      <button id="modal-cancel" class="btn">Batal</button>
+      <button id="modal-ok" class="btn primary">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

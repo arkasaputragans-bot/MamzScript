@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""vpn-backup - backup database akun VPN dan kirim ke Telegram.
+
+Isi backup (relatif terhadap /):
+  etc/ssh/.ssh.db, etc/xray/{vmess,vless,trojan,shadowsocks,ssh}/
+    (database akun + metadata kuota/IP limit),
+  etc/xray/{domain,city,isp,ns_domain}, etc/vpn-panel/servers.db,
+  MANIFEST.txt (info + jumlah akun per protokol).
+
+TIDAK ikut: api.key, bot.env, *.crt, *.key, config.json (rahasia / bisa
+dibangun ulang via `vpnctl resync`).
+
+Hasil: /var/backups/vpn-panel/backup-YYYYMMDD-HHMMSS.tar.gz (rotasi: 7 terakhir).
+Kirim ke Telegram bila BOT_TOKEN & ADMIN_IDS terisi di /etc/vpn-panel/bot.env.
+
+Jadwal otomatis: cron harian (diatur via `menu` > Pengaturan > Backup & Restore).
+"""
+import datetime
+import glob
+import json
+import os
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+
+BACKUP_DIR = "/var/backups/vpn-panel"
+KEEP_LOCAL = 7
+BOT_ENV = "/etc/vpn-panel/bot.env"
+LOG_FILE = "/var/log/vpn-backup.log"
+
+BACKUP_PATHS = [
+    "etc/ssh/.ssh.db",
+    "etc/xray/vmess", "etc/xray/vless", "etc/xray/trojan",
+    "etc/xray/shadowsocks", "etc/xray/ssh",
+    "etc/xray/domain", "etc/xray/city", "etc/xray/isp", "etc/xray/ns_domain",
+    "etc/vpn-panel/servers.db",
+]
+EXCLUDE_SUFFIX = (".crt", ".key")
+EXCLUDE_NAMES = {"api.key", "bot.env", "config.json", "netinfo.json"}
+
+
+def log(msg):
+    line = f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} {msg}"
+    print(line, flush=True)
+    try:
+        with open(LOG_FILE, "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def load_env():
+    cfg = {}
+    try:
+        with open(BOT_ENV) as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return cfg
+
+
+def count_accounts():
+    counts = {}
+    for proto, db in (("ssh", "/etc/ssh/.ssh.db"),
+                      ("vmess", "/etc/xray/vmess/.vmess.db"),
+                      ("vless", "/etc/xray/vless/.vless.db"),
+                      ("trojan", "/etc/xray/trojan/.trojan.db"),
+                      ("shadowsocks", "/etc/xray/shadowsocks/.shadowsocks.db")):
+        n = 0
+        try:
+            with open(db) as f:
+                for line in f:
+                    if line.startswith("### "):
+                        n += 1
+        except OSError:
+            pass
+        counts[proto] = n
+    return counts
+
+
+def should_exclude(path):
+    base = os.path.basename(path)
+    return base in EXCLUDE_NAMES or base.endswith(EXCLUDE_SUFFIX)
+
+
+def build_tarball(dest):
+    counts = count_accounts()
+    host = os.uname().nodename
+    now = datetime.datetime.now()
+    manifest = (
+        f"Backup akun VPN\n"
+        f"Host    : {host}\n"
+        f"Tanggal : {now:%Y-%m-%d %H:%M:%S}\n"
+        f"Format  : kompatibel FighterTunnel (### user expired [secret])\n"
+        f"Akun    : " + ", ".join(f"{p}={c}" for p, c in counts.items()) + "\n"
+        f"Total   : {sum(counts.values())} akun\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        mf = os.path.join(tmp, "MANIFEST.txt")
+        with open(mf, "w") as f:
+            f.write(manifest)
+        with tarfile.open(dest, "w:gz") as tar:
+            tar.add(mf, arcname="MANIFEST.txt")
+            for rel in BACKUP_PATHS:
+                full = os.path.join("/", rel)
+                if not os.path.exists(full):
+                    continue
+                if os.path.isdir(full):
+                    for root, _dirs, files in os.walk(full):
+                        for fn in files:
+                            fp = os.path.join(root, fn)
+                            if should_exclude(fp):
+                                continue
+                            tar.add(fp, arcname=os.path.relpath(fp, "/"))
+                else:
+                    if not should_exclude(full):
+                        tar.add(full, arcname=rel)
+    return counts
+
+
+def send_telegram(token, chat_id, filepath, caption):
+    boundary = "----vpnbackup%d" % os.getpid()
+    with open(filepath, "rb") as f:
+        data = f.read()
+    fname = os.path.basename(filepath)
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="document"; filename="{fname}"\r\n'
+        f"Content-Type: application/gzip\r\n\r\n"
+    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendDocument",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=120) as r:
+        res = json.loads(r.read().decode())
+    return res.get("ok")
+
+
+def rotate():
+    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "backup-*.tar.gz")))
+    for old in files[:-KEEP_LOCAL]:
+        try:
+            os.remove(old)
+            log(f"rotasi: hapus {os.path.basename(old)}")
+        except OSError:
+            pass
+
+
+def main():
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(BACKUP_DIR, f"backup-{ts}.tar.gz")
+    log(f"mulai backup -> {dest}")
+    counts = build_tarball(dest)
+    size_kb = os.path.getsize(dest) // 1024
+    total = sum(counts.values())
+    log(f"selesai: {total} akun, {size_kb} KB")
+    rotate()
+
+    env = load_env()
+    token = env.get("BOT_TOKEN", "")
+    admins = [a.strip() for a in env.get("ADMIN_IDS", "").split(",") if a.strip().isdigit()]
+    if not token or not admins:
+        log("BOT_TOKEN/ADMIN_IDS kosong: backup hanya disimpan lokal.")
+        return 0
+
+    host = os.uname().nodename
+    caption = (f"💾 *Backup akun VPN*\n🖥️ Host: `{host}`\n"
+               f"📅 {datetime.datetime.now():%d %b %Y %H:%M}\n"
+               f"👥 Total: *{total}* akun\n"
+               + "".join(f"• {p}: {c}\n" for p, c in counts.items() if c))
+    ok_all = True
+    for admin in admins:
+        try:
+            if send_telegram(token, admin, dest, caption):
+                log(f"terkirim ke {admin}")
+            else:
+                log(f"GAGAL kirim ke {admin}")
+                ok_all = False
+        except Exception as e:  # noqa: BLE001
+            log(f"GAGAL kirim ke {admin}: {e}")
+            ok_all = False
+    return 0 if ok_all else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

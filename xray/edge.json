@@ -1,0 +1,93 @@
+{
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 10000,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "00000000-0000-0000-0000-000000000000"
+          }
+        ],
+        "decryption": "none",
+        "fallbacks": [
+          {
+            "dest": 10001,
+            "path": "/vmess"
+          },
+          {
+            "dest": 10003,
+            "path": "/vless"
+          },
+          {
+            "dest": 10005,
+            "path": "/trojan"
+          },
+          {
+            "dest": 10007,
+            "path": "/ss-ws"
+          },
+          {
+            "dest": 10011,
+            "path": "/vmess-grpc"
+          },
+          {
+            "dest": 10013,
+            "path": "/vless-grpc"
+          },
+          {
+            "dest": 10015,
+            "path": "/trojan-grpc"
+          },
+          {
+            "dest": 5888,
+            "path": "/api/"
+          },
+          {
+            "dest": 10009
+          }
+        ]
+      },
+      "sniffing": {
+        "destOverride": [
+          "http",
+          "tls"
+        ],
+        "enabled": true
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "sniffing": {
+          "destOverride": [
+            "http",
+            "tls"
+          ],
+          "enabled": true
+        },
+        "tlsSettings": {
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ],
+          "certificates": [
+            {
+              "certificateFile": "/etc/xray/xray.crt",
+              "keyFile": "/etc/xray/xray.key"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "log": {
+    "loglevel": "warning"
+  },
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+:root { --bg:#0f172a; --card:#1e293b; --txt:#e2e8f0; --muted:#94a3b8;
+  --acc:#38bdf8; --ok:#22c55e; --bad:#ef4444; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--txt);
+  font-family:system-ui,-apple-system,sans-serif; }
+.view { min-height:100vh; }
+.hidden { display:none !important; }
+.card { background:var(--card); border-radius:12px; padding:24px;
+  box-shadow:0 4px 24px rgba(0,0,0,.4); }
+.login-card { max-width:380px; margin:12vh auto; }
+.login-card h1 { margin-top:0; }
+.muted { color:var(--muted); }
+label { display:block; margin:12px 0; font-size:14px; }
+input { width:100%; padding:10px; margin-top:4px; border-radius:8px;
+  border:1px solid #334155; background:#0f172a; color:var(--txt); }
+.btn { padding:10px 18px; border-radius:8px; border:0; cursor:pointer;
+  background:#334155; color:var(--txt); font-size:14px; }
+.btn.primary { background:var(--acc); color:#04222f; font-weight:600; }
+.btn.danger { background:var(--bad); color:#fff; }
+.btn.sm { padding:6px 10px; font-size:12px; margin-right:4px; }
+.err { color:var(--bad); }
+header { background:var(--card); padding:12px 20px; display:flex;
+  align-items:center; gap:20px; flex-wrap:wrap; }
+header h1 { margin:0; font-size:20px; }
+nav { display:flex; gap:8px; }
+.tab { background:transparent; color:var(--muted); border:0; cursor:pointer;
+  padding:8px 14px; border-radius:8px; font-size:14px; }
+.tab.active { background:#334155; color:var(--txt); }
+.tab.right { margin-left:auto; }
+main { padding:20px; max-width:1000px; margin:0 auto; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+  gap:10px; margin-bottom:24px; }
+.cell { background:var(--card); border-radius:10px; padding:12px; font-size:13px; }
+.cell b { display:block; font-size:18px; margin-top:4px; }
+.dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+.dot.on { background:var(--ok); } .dot.off { background:var(--bad); }
+.row { display:flex; gap:10px; align-items:center; margin:12px 0; flex-wrap:wrap; }
+.row.end { justify-content:flex-end; }
+.pills { display:flex; gap:6px; flex-wrap:wrap; }
+.pill { padding:8px 14px; border-radius:20px; border:1px solid #334155;
+  background:transparent; color:var(--muted); cursor:pointer; }
+.pill.active { background:var(--acc); color:#04222f; border-color:var(--acc);
+  font-weight:600; }
+.tbl { width:100%; border-collapse:collapse; margin-top:12px; }
+.tbl th, .tbl td { text-align:left; padding:10px; border-bottom:1px solid #334155;
+  font-size:14px; }
+.tbl th { color:var(--muted); font-weight:500; }
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex;
+  align-items:center; justify-content:center; z-index:10; }
+.modal .card { width:380px; max-width:92vw; }
+.modal h2 { margin-top:0; }
+.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+  background:var(--card); border:1px solid #334155; padding:12px 20px;
+  border-radius:10px; z-index:20; }
+pre.detail { background:#0f172a; padding:12px; border-radius:8px; overflow:auto;
+  font-size:12px; white-space:pre-wrap; word-break:break-all; }
+
+/* --- detail akun & copy link --- */
+.modal .card.wide { width:640px; max-width:94vw; max-height:88vh; overflow-y:auto; }
+.info-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+  gap:8px; margin:12px 0 16px; }
+.info-grid div { background:#0f172a; border-radius:8px; padding:8px 12px; }
+.info-grid span { display:block; font-size:11px; color:var(--muted); }
+.info-grid b { font-size:14px; word-break:break-all; }
+.link-row { display:flex; align-items:center; gap:8px; margin:8px 0;
+  background:#0f172a; border-radius:8px; padding:8px 10px; }
+.link-label { flex:0 0 auto; font-size:12px; font-weight:600; color:var(--acc);
+  min-width:110px; }
+.link-text { flex:1 1 auto; min-width:0; font-size:11px; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.btn.wide { width:100%; margin-top:14px; padding:12px; font-size:15px; }
+.search { max-width:260px; }
+.tbl-wrap { overflow-x:auto; }
+td.acts { white-space:nowrap; }
+@media (max-width:600px) {
+  main { padding:12px; }
+  .link-label { min-width:86px; font-size:11px; }
+}

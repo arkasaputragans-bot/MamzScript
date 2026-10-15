@@ -1,0 +1,698 @@
+#!/usr/bin/env python3
+"""menu - menu interaktif di terminal untuk kelola akun VPN.
+
+Jalankan:  menu
+Tinggal pilih nomor, jawab yang ditanya, beres.
+"""
+import json
+import subprocess
+import sys
+import time
+
+PROTOS = ["ssh", "vmess", "vless", "trojan", "shadowsocks"]
+LABEL = {"ssh": "SSH", "vmess": "VMess", "vless": "VLESS",
+         "trojan": "Trojan", "shadowsocks": "Shadowsocks"}
+VPNCTL = "/usr/local/bin/vpnctl"
+META_FILES = {"domain": "/etc/xray/domain", "ns_domain": "/etc/xray/ns_domain",
+              "city": "/etc/xray/city", "isp": "/etc/xray/isp"}
+API_KEY_FILE = "/etc/xray/api.key"
+NETINFO_CACHE = "/etc/xray/netinfo.json"
+
+
+def vpnctl(*args):
+    p = subprocess.run([VPNCTL, *args], capture_output=True, text=True, timeout=120)
+    try:
+        return json.loads(p.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return {"status": "error", "message": "vpnctl gagal dijalankan"}
+
+
+def read_file(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def write_file(path, val):
+    with open(path, "w") as f:
+        f.write(val + "\n")
+
+
+def netinfo():
+    """IP publik, region, ISP, kota. Cache 24 jam biar menu tetap cepat."""
+    try:
+        with open(NETINFO_CACHE) as f:
+            d = json.load(f)
+        if time.time() - d.get("_ts", 0) < 86400:
+            return d
+    except (OSError, ValueError):
+        pass
+    d = {}
+    sources = [
+        ("http://ip-api.com/json/",
+         lambda j: {"ip": j.get("query", ""), "region": j.get("regionName", ""),
+                    "city": j.get("city", ""), "country": j.get("country", ""),
+                    "isp": j.get("isp", "")} if j.get("status") == "ok" else None),
+        ("https://ipinfo.io/json",
+         lambda j: {"ip": j.get("ip", ""), "region": j.get("region", ""),
+                    "city": j.get("city", ""), "country": j.get("country", ""),
+                    "isp": j.get("org", "")} if j.get("ip") else None),
+    ]
+    for url, parse in sources:
+        try:
+            p = subprocess.run(["curl", "-s", "--max-time", "8", url],
+                               capture_output=True, text=True, timeout=12)
+            parsed = parse(json.loads(p.stdout))
+            if parsed and parsed.get("ip"):
+                d = parsed
+                break
+        except Exception:
+            continue
+    if d:
+        d["_ts"] = time.time()
+        try:
+            with open(NETINFO_CACHE, "w") as f:
+                json.dump(d, f)
+        except OSError:
+            pass
+    return d
+
+
+def cert_info():
+    """Return (valid: bool, info: str) untuk /etc/xray/xray.crt."""
+    import datetime as _dt
+    try:
+        p = subprocess.run(["openssl", "x509", "-noout", "-enddate",
+                            "-in", "/etc/xray/xray.crt"],
+                           capture_output=True, text=True, timeout=10)
+        s = p.stdout.strip().split("=", 1)[1]  # notAfter=Jan 12 13:20:47 2027 GMT
+        exp = _dt.datetime.strptime(s, "%b %d %H:%M:%S %Y %Z")
+        ok = exp > _dt.datetime.utcnow()
+        return ok, "valid s/d " + exp.strftime("%d %b %Y")
+    except Exception:
+        return False, "belum ada"
+
+
+def banner():
+    ni = netinfo()
+    ip = ni.get("ip") or "-"
+    domain = read_file(META_FILES["domain"]) or "-"
+    tls_ok, tls_info = cert_info()
+    key = read_file(API_KEY_FILE) or "-"
+    loc_parts = []
+    for x in (ni.get("city"), ni.get("region"), ni.get("country")):
+        if x and x not in loc_parts:
+            loc_parts.append(x)
+    loc = ", ".join(loc_parts) or "-"
+    print("\n" + "=" * 52)
+    print("  🛡️  PANEL VPN")
+    print("=" * 52)
+    print(f"  🌍 IP Publik   : {ip}")
+    print(f"  📍 Lokasi      : {loc}")
+    print(f"  🏢 ISP         : {ni.get('isp') or '-'}")
+    print(f"  🌐 Domain      : {domain}")
+    print(f"  🔒 TLS         : {'✅ ' if tls_ok else '❌ '}{tls_info}")
+    print(f"  🔑 API Key     : {key}")
+    web_host = domain if domain != "-" else ip
+    print(f"  🖥️  Web UI      : http://{web_host}/panel/")
+    print("  " + "-" * 50)
+
+
+def ask(prompt, default=""):
+    suffix = f" [{default}]" if default else ""
+    v = input(f"  {prompt}{suffix}: ").strip()
+    return v or default
+
+
+def ask_int(prompt, default="0"):
+    while True:
+        v = ask(prompt, default)
+        if v.isdigit():
+            return v
+        print("  ❌ Masukkan angka.")
+
+
+def pilih_protokol():
+    print("\n  Pilih protokol:")
+    for i, p in enumerate(PROTOS, 1):
+        print(f"   {i}. {LABEL[p]}")
+    print("   0. Kembali")
+    while True:
+        v = ask("Nomor").strip()
+        if v == "0":
+            return None
+        if v.isdigit() and 1 <= int(v) <= len(PROTOS):
+            return PROTOS[int(v) - 1]
+        print("  ❌ Nomor tidak valid.")
+
+
+def pause():
+    input("\n  [Enter untuk lanjut]")
+
+
+def tampil_akun(proto, data):
+    print("\n  " + "─" * 42)
+    print(f"  🌟 AKUN {LABEL[proto]} BERHASIL DIBUAT 🌟")
+    print("  " + "─" * 42)
+    print(f"   👤 Username : {data.get('username')}")
+    print(f"   🌐 Domain   : {data.get('domain')}")
+    if proto == "ssh":
+        print(f"   🔑 Password  : {data.get('password')}")
+        print("   🔌 Port SSH  : 22, 143, 109")
+        print("   📡 SSH-WS    : port 80, path /ssh-ws")
+    else:
+        print(f"   🆔 UUID      : {data.get('uuid')}")
+        print("   🔌 Port TLS  : 443   |  non-TLS : 80")
+        for k in ("vmess_tls_link", "vless_tls_link", "trojan_tls_link",
+                  "shadowsocks_tls_link"):
+            if k in data:
+                print(f"\n   🔐 TLS:\n   {data[k]}")
+        for k in ("vmess_nontls_link", "vless_nontls_link", "trojan_nontls_link",
+                  "shadowsocks_nontls_link"):
+            if k in data:
+                print(f"\n   🔓 Non-TLS:\n   {data[k]}")
+        for k in ("vmess_grpc_link", "vless_grpc_link", "trojan_grpc_link"):
+            if k in data:
+                print(f"\n   📦 gRPC:\n   {data[k]}")
+    q = data.get("quota", "0")
+    print(f"\n   📅 Expired   : {data.get('expired')}")
+    print(f"   📦 Kuota     : {'Unlimited' if q in ('0 GB', '0') else q}")
+    print(f"   🌍 IP limit  : {data.get('ip_limit')}")
+    print("  " + "─" * 42)
+
+
+def menu_buat():
+    proto = pilih_protokol()
+    if not proto:
+        return
+    print(f"\n  Buat akun {LABEL[proto]} baru")
+    while True:
+        user = ask("Username (huruf+angka)")
+        if user.isalnum():
+            break
+        print("  ❌ Username hanya huruf dan angka.")
+    exp = ask_int("Masa aktif (hari)", "30")
+    if proto == "ssh":
+        password = ask("Password (kosongkan = acak)")
+        iplimit = ask_int("Limit IP (0=unlimited)", "0")
+        args = ["create", "ssh", user, exp, "0", iplimit]
+        if password:
+            args.append(password)
+    else:
+        quota = ask("Kuota GB (0=unlimited)", "0")
+        iplimit = ask_int("Limit IP (0=unlimited)", "0")
+        if proto in ("vmess", "vless"):
+            custom = ask("UUID custom (kosongkan = acak, mis. 'imam')")
+        else:
+            custom = ask("Password custom (kosongkan = acak)")
+        args = ["create", proto, user, exp, quota, iplimit]
+        if custom:
+            args.append(custom)
+    print("  ⏳ Memproses...")
+    res = vpnctl(*args)
+    if res.get("status") == "success":
+        tampil_akun(proto, res["data"])
+    else:
+        print(f"  ❌ Gagal: {res.get('message')}")
+    pause()
+
+
+def menu_hapus():
+    proto = pilih_protokol()
+    if not proto:
+        return
+    user = ask("Username yang dihapus")
+    if not user:
+        return
+    yakin = ask(f"Yakin hapus {user}? (y/n)", "n")
+    if yakin.lower() != "y":
+        print("  Dibatalkan.")
+        return
+    res = vpnctl("delete", proto, user)
+    print("  ✅ " + res.get("message", "") if res.get("status") == "success"
+          else f"  ❌ {res.get('message')}")
+    pause()
+
+
+def menu_renew():
+    proto = pilih_protokol()
+    if not proto:
+        return
+    user = ask("Username")
+    days = ask_int("Tambah berapa hari", "30")
+    res = vpnctl("renew", proto, user, days)
+    if res.get("status") == "success":
+        print(f"  ✅ Diperpanjang sampai {res['data']['expired']}")
+    else:
+        print(f"  ❌ {res.get('message')}")
+    pause()
+
+
+def menu_cek():
+    proto = pilih_protokol()
+    if not proto:
+        return
+    user = ask("Username")
+    res = vpnctl("check", proto, user)
+    if res.get("status") == "success":
+        d = res["data"]
+        print(f"\n   👤 {d['username']}  |  📅 {d['expired']}  |  "
+              f"📦 {d.get('quota')}  |  🌍 {d.get('ip_limit')} IP")
+        if d.get("uuid"):
+            print(f"   🆔 {d['uuid']}")
+        if d.get("password"):
+            print(f"   🔑 {d['password']}")
+    else:
+        print(f"  ❌ {res.get('message')}")
+    pause()
+
+
+def menu_list():
+    for proto in PROTOS:
+        res = vpnctl("list", proto)
+        rows = res.get("data", []) if res.get("status") == "success" else []
+        print(f"\n  {LABEL[proto]} ({len(rows)} akun):")
+        for r in rows:
+            print(f"    • {r['username']}  (exp {r['expired']})")
+    pause()
+
+
+def menu_suspend():
+    proto = pilih_protokol()
+    if not proto:
+        return
+    user = ask("Username")
+    print("   1. Suspend (bekukan)\n   2. Unsuspend (aktifkan lagi)")
+    v = ask("Pilih", "1")
+    res = vpnctl("suspend" if v == "1" else "unsuspend", proto, user)
+    print("  ✅ " + res.get("message", "") if res.get("status") == "success"
+          else f"  ❌ {res.get('message')}")
+    pause()
+
+
+def menu_status():
+    print()
+    for s in ["xray@edge", "xray@vmess", "xray@vless", "xray@trojan",
+              "xray@shadowsocks", "haproxy", "nginx", "dropbear",
+              "vpn-ws", "panel-api", "vpn-quota", "panel-bot"]:
+        p = subprocess.run(["systemctl", "is-active", s],
+                           capture_output=True, text=True)
+        st = p.stdout.strip()
+        icon = "🟢" if st == "active" else "🔴"
+        print(f"  {icon} {s:22} {st}")
+    pause()
+
+
+# ---------------- PENGATURAN ----------------
+
+def menu_pengaturan():
+    salah = 0
+    while True:
+        print("\n  ⚙️  PENGATURAN")
+        print("   1. 🌐 Set domain + pasang TLS (all-in-one)")
+        print("   2. 🏷️  Info server (NS domain, kota, ISP)")
+        print("   3. 🤖 Setting bot Telegram")
+        print("   4. 🗄️  Kelola daftar server")
+        print("   5. 🔑 Lihat / ganti API key")
+        print("   6. 🔄 Restart service VPN")
+        print("   7. 💾 Backup & Restore")
+        print("   0. Kembali")
+        print("  " + "-" * 42)
+        v = ask("Pilih").strip()
+        if v in ("0", "1", "2", "3", "4", "5", "6", "7"):
+            salah = 0
+        if v == "1":
+            domain_tls_allinone()
+        elif v == "2":
+            info_server()
+        elif v == "3":
+            setting_bot()
+        elif v == "4":
+            kelola_server()
+        elif v == "5":
+            api_key_menu()
+        elif v == "6":
+            restart_services()
+        elif v == "7":
+            menu_backup()
+        elif v == "0":
+            return
+        else:
+            salah += 1
+            print("  ❌ Pilih 0-7.")
+            if salah >= 5:
+                print("  ⚠️ Kebanyakan input salah.")
+                print("  💡 Jangan paste teks ke dalam menu — ketik angkanya saja, lalu Enter.")
+                return
+
+
+def domain_tls_allinone():
+    """Set domain + langsung pasang sertifikat TLS dalam satu alur."""
+    cur = read_file(META_FILES["domain"])
+    print(f"  Domain sekarang: {cur or '-'}")
+    d = ask("Domain baru (kosongkan = pakai yang sekarang)", cur or "")
+    if d:
+        d = d.strip().lower()
+        write_file(META_FILES["domain"], d)
+        # reset cache netinfo biar banner langsung update kalau perlu
+        print("  ✅ Domain disimpan.")
+        cur = d
+    if not cur:
+        print("  ❌ Domain masih kosong.")
+        pause()
+        return
+    t = ask("Pasang/perbarui sertifikat TLS sekarang? (y/n)", "y")
+    if t.lower() == "y":
+        pasang_tls()
+    else:
+        print("  Sertifikat dilewati. Bisa dipasang kapan saja dari menu ini.")
+        pause()
+
+
+def pasang_tls():
+    domain = read_file(META_FILES["domain"])
+    if not domain:
+        print("  ❌ Isi domain dulu.")
+        pause()
+        return
+    print(f"  Akan issue sertifikat untuk {domain}.")
+    print("  Port 80 akan dimatikan sebentar (haproxy+nginx stop).")
+    yakin = ask("Lanjut? (y/n)", "y")
+    if yakin.lower() != "y":
+        return
+    acme = "/root/.acme.sh/acme.sh"
+    email = f"admin@{domain}"
+    # bersihkan sisa state gagal sebelumnya (kalau ada)
+    import shutil as _sh
+    _sh.rmtree(f"/root/.acme.sh/{domain}_ecc", ignore_errors=True)
+    cmds = [
+        ["systemctl", "stop", "haproxy", "nginx"],
+        [acme, "--set-default-ca", "--server", "letsencrypt"],
+        [acme, "--issue", "-d", domain, "--standalone",
+         "--accountemail", email],
+        [acme, "--install-cert", "-d", domain,
+         "--fullchain-file", "/etc/xray/xray.crt",
+         "--key-file", "/etc/xray/xray.key"],
+    ]
+    ok = True
+    for c in cmds:
+        print(f"  $ {' '.join(c)}")
+        r = subprocess.run(c, capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            print(f"  ❌ Gagal:\n{r.stderr[-800:]}")
+            ok = False
+            break
+    subprocess.run(["chown", "www-data:www-data", "/etc/xray/xray.crt", "/etc/xray/xray.key"])
+    subprocess.run(["chmod", "600", "/etc/xray/xray.key"])
+    subprocess.run(["systemctl", "start", "nginx", "haproxy"])
+    subprocess.run(["systemctl", "restart", "xray@edge"])
+    print("  ✅ Sertifikat terpasang & service dinyalakan lagi." if ok
+          else "  ⚠️ Ada yang gagal, haproxy+nginx sudah dinyalakan lagi.")
+    pause()
+
+
+def info_server():
+    ni = netinfo()
+    for key, label, detected in (("ns_domain", "NS domain (untuk SlowDNS)", ""),
+                                ("city", "Kota", ni.get("city", "")),
+                                ("isp", "ISP", ni.get("isp", ""))):
+        cur = read_file(META_FILES[key])
+        saran = detected if (detected and not cur) else cur
+        val = ask(f"{label} (sekarang: {cur or '-'})", saran)
+        write_file(META_FILES[key], val)
+    print("  ✅ Info server disimpan.")
+    pause()
+
+
+def setting_bot():
+    env_path = "/etc/vpn-panel/bot.env"
+    cfg = {}
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+    except OSError:
+        pass
+    print(f"  Token sekarang: {'(terisi)' if cfg.get('BOT_TOKEN') else '(kosong)'}")
+    token = ask("BOT_TOKEN baru (kosongkan = tidak diubah)")
+    if token:
+        cfg["BOT_TOKEN"] = token
+    print(f"  Admin IDs sekarang: {cfg.get('ADMIN_IDS', '(kosong)')}")
+    admins = ask("ADMIN_IDS baru, pisahkan koma (kosongkan = tidak diubah)")
+    if admins:
+        cfg["ADMIN_IDS"] = admins
+    if token or admins:
+        with open(env_path, "w") as f:
+            f.write(f"BOT_TOKEN={cfg.get('BOT_TOKEN', '')}\n")
+            f.write(f"ADMIN_IDS={cfg.get('ADMIN_IDS', '')}\n")
+        import os as _os
+        _os.chmod(env_path, 0o600)
+        print("  ✅ Disimpan.")
+    if cfg.get("BOT_TOKEN"):
+        subprocess.run(["systemctl", "enable", "--now", "panel-bot"],
+                       capture_output=True, text=True)
+        st = subprocess.run(["systemctl", "is-active", "panel-bot"],
+                            capture_output=True, text=True).stdout.strip()
+        print(f"  Bot status: {st}")
+    else:
+        print("  ⚠️ Token masih kosong, bot belum bisa jalan.")
+    pause()
+
+
+def kelola_server():
+    import sqlite3
+    db_path = "/etc/vpn-panel/servers.db"
+    con = sqlite3.connect(db_path)
+    con.execute("CREATE TABLE IF NOT EXISTS Server ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT, auth TEXT)")
+    while True:
+        rows = con.execute("SELECT id, domain FROM Server").fetchall()
+        print("\n  Daftar server:")
+        for i, d in rows:
+            print(f"    {i}. {d}")
+        if not rows:
+            print("    (kosong)")
+        print("\n   1. Tambah server\n   2. Hapus server\n   0. Kembali")
+        v = ask("Pilih").strip()
+        if v == "1":
+            domain = ask("Domain/IP server")
+            auth = ask("Auth key server itu")
+            if domain and auth:
+                con.execute("INSERT INTO Server (domain, auth) VALUES (?, ?)",
+                            (domain, auth))
+                con.commit()
+                print("  ✅ Ditambahkan.")
+        elif v == "2":
+            sid = ask("ID yang dihapus")
+            if sid.isdigit():
+                con.execute("DELETE FROM Server WHERE id=?", (sid,))
+                con.commit()
+                print("  ✅ Dihapus.")
+        elif v == "0":
+            break
+    con.close()
+
+
+def api_key_menu():
+    print(f"\n  API key sekarang:\n  {read_file(API_KEY_FILE)}")
+    print("  Dipakai oleh: web UI, bot jual-beli (kolom auth), API.")
+    v = ask("Ganti dengan yang baru? (y/n)", "n")
+    if v.lower() == "y":
+        import secrets as _s
+        import os as _os
+        new = _s.token_urlsafe(24)
+        write_file(API_KEY_FILE, new)
+        _os.chmod(API_KEY_FILE, 0o600)
+        print(f"  ✅ API key baru:\n  {new}")
+        print("  ⚠️ Jangan lupa update di:")
+        print("     • Web UI (login ulang dengan key baru)")
+        print("     • Bot jual-beli (kolom auth server di sellvpn.db)")
+    pause()
+
+
+def restart_services():
+    svcs = ["xray@edge", "xray@vmess", "xray@vless", "xray@trojan",
+            "xray@shadowsocks", "haproxy", "nginx", "dropbear",
+            "vpn-ws", "panel-api", "vpn-quota"]
+    yakin = ask("Restart semua service VPN? (y/n)", "y")
+    if yakin.lower() != "y":
+        return
+    print("  ⏳ Merestart...")
+    for s in svcs:
+        subprocess.run(["systemctl", "restart", s], capture_output=True)
+    print("  ✅ Semua service direstart.")
+    pause()
+
+
+# ---------------- BACKUP & RESTORE ----------------
+
+BACKUP_DIR = "/var/backups/vpn-panel"
+BACKUP_CRON = "/etc/cron.d/vpn-backup"
+
+
+def menu_backup():
+    while True:
+        print("\n  💾 BACKUP & RESTORE")
+        print("   1. Backup sekarang (kirim ke Telegram bila bot aktif)")
+        print("   2. Atur jadwal backup otomatis")
+        print("   3. Lihat backup lokal")
+        print("   4. Restore dari backup lokal")
+        print("   0. Kembali")
+        print("  " + "-" * 42)
+        print("  💡 Restore juga bisa via bot Telegram: kirim file")
+        print("     `.tar.gz` / `.db` ke chat bot.")
+        v = ask("Pilih").strip()
+        if v == "1":
+            backup_sekarang()
+        elif v == "2":
+            backup_jadwal()
+        elif v == "3":
+            backup_list()
+        elif v == "4":
+            backup_restore_lokal()
+        elif v == "0":
+            return
+        else:
+            print("  ❌ Pilih 0-4.")
+
+
+def backup_sekarang():
+    print("  ⏳ Membuat backup...")
+    r = subprocess.run(["/usr/local/bin/vpn-backup"], capture_output=True,
+                       text=True, timeout=300)
+    for line in r.stdout.strip().splitlines()[-8:]:
+        print("  " + line)
+    if r.returncode != 0:
+        print("  ❌ Backup gagal.")
+    pause()
+
+
+def backup_jadwal():
+    cur = ""
+    try:
+        with open(BACKUP_CRON) as f:
+            for line in f:
+                if "vpn-backup" in line and not line.startswith("#"):
+                    cur = line.split()[1]  # jam
+    except OSError:
+        pass
+    print(f"  Jadwal sekarang: {'tiap hari jam ' + cur + ':00' if cur else '(mati)'}")
+    v = ask("Jam backup harian (0-23), atau 'off' untuk matikan", cur or "3")
+    if v.lower() == "off":
+        try:
+            os.remove(BACKUP_CRON)
+        except OSError:
+            pass
+        print("  ✅ Backup otomatis dimatikan.")
+    elif v.isdigit() and 0 <= int(v) <= 23:
+        with open(BACKUP_CRON, "w") as f:
+            f.write(f"# Backup akun VPN otomatis (dibuat via menu)\n"
+                    f"{int(v)} * * * * root /usr/local/bin/vpn-backup\n")
+        os.chmod(BACKUP_CRON, 0o644)
+        print(f"  ✅ Backup otomatis tiap hari jam {int(v)}:00.")
+    else:
+        print("  ❌ Input tidak valid.")
+    pause()
+
+
+def backup_list():
+    import glob as _g
+    files = sorted(_g.glob(os.path.join(BACKUP_DIR, "backup-*.tar.gz")))
+    print(f"\n  Backup lokal ({BACKUP_DIR}):")
+    if not files:
+        print("    (belum ada)")
+    for f in files[-10:]:
+        size = os.path.getsize(f) // 1024
+        print(f"    • {os.path.basename(f)}  ({size} KB)")
+    pause()
+
+
+def backup_restore_lokal():
+    import glob as _g
+    files = sorted(_g.glob(os.path.join(BACKUP_DIR, "backup-*.tar.gz")))
+    if not files:
+        print("  ❌ Belum ada file backup.")
+        pause()
+        return
+    print("\n  Pilih backup:")
+    for i, f in enumerate(files, 1):
+        print(f"   {i}. {os.path.basename(f)}")
+    print("   0. Batal")
+    v = ask("Nomor").strip()
+    if not v.isdigit() or not (1 <= int(v) <= len(files)):
+        return
+    f = files[int(v) - 1]
+    yakin = ask(f"Restore dari {os.path.basename(f)}? DB sekarang diamankan dulu. (y/n)", "n")
+    if yakin.lower() != "y":
+        print("  Dibatalkan.")
+        return
+    print("  ⏳ Merestore...")
+    r = vpnctl("restore", f)
+    if r.get("status") == "success":
+        d = r["data"]
+        print(f"  ✅ Restore selesai. DB lama: {d.get('safety_dir')}")
+        for proto, info in d.get("resync", {}).items():
+            if isinstance(info, dict) and "total" in info:
+                print(f"     • {proto}: {info['total']} akun "
+                      f"({info.get('added', 0)} diaktifkan ulang)")
+    else:
+        print(f"  ❌ {r.get('message')}")
+    pause()
+
+
+def main():
+    salah = 0
+    while True:
+        banner()
+        print("   1. Buat akun baru")
+        print("   2. Hapus akun")
+        print("   3. Perpanjang akun")
+        print("   4. Cek detail akun")
+        print("   5. List semua akun")
+        print("   6. Suspend / unsuspend akun")
+        print("   7. Status service")
+        print("   8. ⚙️  Pengaturan")
+        print("   0. Keluar")
+        print("  " + "-" * 42)
+        v = ask("Pilih [0-8]").strip()
+        if v in ("0", "1", "2", "3", "4", "5", "6", "7"):
+            salah = 0
+        if v == "1":
+            menu_buat()
+        elif v == "2":
+            menu_hapus()
+        elif v == "3":
+            menu_renew()
+        elif v == "4":
+            menu_cek()
+        elif v == "5":
+            menu_list()
+        elif v == "6":
+            menu_suspend()
+        elif v == "7":
+            menu_status()
+        elif v == "8":
+            menu_pengaturan()
+        elif v == "0":
+            print("\n  Sampai jumpa! 👋\n")
+            break
+        else:
+            salah += 1
+            print("  ❌ Pilih nomor 0-8.")
+            if salah >= 5:
+                print("  ⚠️ Kebanyakan input salah.")
+                print("  💡 Jangan paste teks ke dalam menu — ketik angkanya saja, lalu Enter.")
+                break
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n  Dibatalkan.\n")
+        sys.exit(0)

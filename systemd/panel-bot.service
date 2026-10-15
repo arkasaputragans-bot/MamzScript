@@ -1,0 +1,13 @@
+[Unit]
+Description=VPN Panel Telegram bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/panel-bot.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
