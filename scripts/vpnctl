@@ -405,8 +405,24 @@ def do_renew(proto, user, days):
         run(["usermod", "-U", user])  # pastikan tidak terkunci
     if is_suspended(proto, user):
         do_unsuspend(proto, user)
+    # Reset kuota: hapus usage agar kembali full (paket awal).
+    # Limit kuota tidak berubah (tetap dari paket awal di meta files).
+    try:
+        import json as _json
+        _uf = "/var/lib/vpn-panel/usage.json"
+        if os.path.exists(_uf):
+            with open(_uf) as _f:
+                _st = _json.load(_f)
+            _key = f"{proto}/{user}"
+            if _key in _st:
+                del _st[_key]
+                with open(_uf + ".tmp", "w") as _f:
+                    _json.dump(_st, _f)
+                os.replace(_uf + ".tmp", _uf)
+    except Exception:
+        pass
     return {"status": "success",
-            "data": {"username": user, "expired": new_exp}}
+            "data": {"username": user, "expired": new_exp, "quota_reset": True}}
 
 
 def do_check(proto, user):
