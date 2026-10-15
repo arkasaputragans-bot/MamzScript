@@ -61,14 +61,35 @@ def send_ws_frame(sock, payload, opcode=0x2):
 
 def ws_to_ssh(client):
     # --- handshake HTTP Upgrade ---
+    # Kompatibel payload bug-host / split: baca request pertama, lalu tunggu
+    # sebentar (0.4 dtk) untuk segmen susulan (split payload) sebelum menilai.
     req = b""
+    client.settimeout(5)
     while b"\r\n\r\n" not in req:
-        chunk = client.recv(4096)
+        try:
+            chunk = client.recv(4096)
+        except socket.timeout:
+            break
         if not chunk:
-            return
+            break
         req += chunk
         if len(req) > 16384:
-            return
+            break
+    # Kasih kesempatan buat segmen split yang telat datang
+    client.settimeout(0.4)
+    try:
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            req += chunk
+            if len(req) > 16384:
+                break
+    except socket.timeout:
+        pass
+    except OSError:
+        pass
+    client.settimeout(None)
     key = None
     has_upgrade = False
     for line in req.decode("latin1").split("\r\n"):
