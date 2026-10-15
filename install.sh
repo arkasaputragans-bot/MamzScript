@@ -232,7 +232,12 @@ chmod 600 /etc/xray/api.key
 mkdir -p /etc/vpn-panel
 [ -f /etc/vpn-panel/bot.env ] || printf "# Isi dengan token dari @BotFather dan ID Telegram admin\nBOT_TOKEN=\nADMIN_IDS=\n" > /etc/vpn-panel/bot.env
 chmod 600 /etc/vpn-panel/bot.env
-pip3 install -q --break-system-packages "python-telegram-bot>=20" 2>/dev/null || true
+if ! python3 -c "import telegram" 2>/dev/null; then
+  pip3 install --break-system-packages "python-telegram-bot>=20" 2>&1 | tail -2
+fi
+python3 -c "import telegram" 2>/dev/null \
+  && echo "  python-telegram-bot OK" \
+  || echo "  ⚠️ python-telegram-bot GAGAL dipasang — bot Telegram tidak akan jalan sampai ini diinstall manual"
 systemctl daemon-reload
 systemctl enable panel-api vpn-quota
 systemctl restart panel-api vpn-quota
