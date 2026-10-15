@@ -1,0 +1,693 @@
+#!/usr/bin/env python3
+"""vpnctl - provisioning akun VPN (pengganti binary apicreate/dkk).
+
+Format database & file dibuat IDENTIK dengan sistem FighterTunnel agar
+bisa backup/restore tukar-pakai:
+  DB teks : /etc/ssh/.ssh.db, /etc/xray/{vmess,vless,trojan,shadowsocks}/.<proto>.db
+            format baris:  ### <user> <expiry YYYY-MM-DD> [uuid]
+  Metadata: /etc/xray/<proto>/<user>    = kuota dalam bytes (0 = unlimited)
+            /etc/xray/<proto>/<user>IP  = batas IP (0 = unlimited)
+
+Penggunaan:
+  vpnctl create <proto> <user> <hari> <kuota_gb> <limit_ip> [password]
+           [password]: utk ssh = password custom; utk vmess/vless = UUID custom
+           (UUID formal ATAU string bebas mis. "imam"); utk trojan/ss = password custom.
+  vpnctl delete <proto> <user>
+  vpnctl renew  <proto> <user> <hari_tambahan>
+  vpnctl check  <proto> <user>
+  vpnctl list   <proto>
+  vpnctl resync                 (sinkron ulang DB -> config xray & user SSH)
+  vpnctl restore <backup.tar.gz> (restore penuh; dukung format backup FT)
+  vpnctl restore-info <backup.tar.gz> (intip isi backup tanpa restore)
+  vpnctl restoredb <proto> <file.db> (restore satu database protokol)
+proto: ssh | vmess | vless | trojan | shadowsocks
+"""
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import uuid
+from datetime import date, datetime, timedelta
+
+PROTOS = ("ssh", "vmess", "vless", "trojan", "shadowsocks")
+
+DB_PATH = {
+    "ssh": "/etc/ssh/.ssh.db",
+    "vmess": "/etc/xray/vmess/.vmess.db",
+    "vless": "/etc/xray/vless/.vless.db",
+    "trojan": "/etc/xray/trojan/.trojan.db",
+    "shadowsocks": "/etc/xray/shadowsocks/.shadowsocks.db",
+}
+META_DIR = {
+    "ssh": "/etc/xray/ssh",
+    "vmess": "/etc/xray/vmess",
+    "vless": "/etc/xray/vless",
+    "trojan": "/etc/xray/trojan",
+    "shadowsocks": "/etc/xray/shadowsocks",
+}
+XRAY_CONFIG = {
+    "vmess": "/etc/xray/vmess/config.json",
+    "vless": "/etc/xray/vless/config.json",
+    "trojan": "/etc/xray/trojan/config.json",
+    "shadowsocks": "/etc/xray/shadowsocks/config.json",
+}
+API_PORT = {"vmess": 20001, "vless": 20002, "trojan": 20003, "shadowsocks": 20004}
+
+DOMAIN_FILE = "/etc/xray/domain"
+PUBKEY_FILE = "/etc/xray/pubkey"
+
+
+def get_domain():
+    try:
+        with open(DOMAIN_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return "example.com"
+
+
+def get_pubkey():
+    try:
+        with open(PUBKEY_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def expiry_date(days):
+    return (date.today() + timedelta(days=int(days))).isoformat()
+
+
+# ---------------- database teks ----------------
+
+def db_read(proto):
+    """Kembalikan dict {user: (expiry, secret)}."""
+    users = {}
+    try:
+        with open(DB_PATH[proto]) as f:
+            for line in f:
+                m = re.match(r"^###\s+(\S+)\s+(\S+)(?:\s+(\S+))?", line.strip())
+                if m:
+                    users[m.group(1)] = (m.group(2), m.group(3) or "")
+    except OSError:
+        pass
+    return users
+
+
+def db_write(proto, users):
+    os.makedirs(os.path.dirname(DB_PATH[proto]), exist_ok=True)
+    with open(DB_PATH[proto], "w") as f:
+        for user, (exp, secret) in users.items():
+            line = f"### {user} {exp}"
+            if secret:
+                line += f" {secret}"
+            f.write(line + "\n")
+
+
+def meta_write(proto, user, quota_gb, ip_limit):
+    d = META_DIR[proto]
+    os.makedirs(d, exist_ok=True)
+    quota_bytes = int(float(quota_gb) * 1024**3) if float(quota_gb) > 0 else 0
+    with open(os.path.join(d, user), "w") as f:
+        f.write(str(quota_bytes))
+    with open(os.path.join(d, user + "IP"), "w") as f:
+        f.write(str(ip_limit))
+
+
+def meta_read(proto, user):
+    quota, iplimit = "0", "0"
+    try:
+        with open(os.path.join(META_DIR[proto], user)) as f:
+            quota = f.read().strip()
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(META_DIR[proto], user + "IP")) as f:
+            iplimit = f.read().strip()
+    except OSError:
+        pass
+    return quota, iplimit
+
+
+def meta_delete(proto, user):
+    for suffix in ("", "IP"):
+        try:
+            os.remove(os.path.join(META_DIR[proto], user + suffix))
+        except OSError:
+            pass
+
+
+# ---------------- xray config ----------------
+
+def client_object(proto, user, secret):
+    if proto == "vmess":
+        return {"id": secret, "alterId": 0, "email": user}
+    if proto == "vless":
+        return {"id": secret, "email": user}
+    if proto == "trojan":
+        return {"password": secret, "email": user}
+    if proto == "shadowsocks":
+        return {"method": "aes-256-gcm", "password": secret, "email": user}
+    raise ValueError(proto)
+
+
+def xray_add_client(proto, user, secret):
+    path = XRAY_CONFIG[proto]
+    with open(path) as f:
+        cfg = json.load(f)
+    obj = client_object(proto, user, secret)
+    for ib in cfg.get("inbounds", []):
+        if ib.get("protocol") in ("vmess", "vless", "trojan", "shadowsocks"):
+            clients = ib["settings"].setdefault("clients", [])
+            clients[:] = [c for c in clients if c.get("email") != user]
+            clients.append(dict(obj))
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    run(["systemctl", "restart", f"xray@{proto}"])
+
+
+def xray_del_client(proto, user):
+    path = XRAY_CONFIG[proto]
+    with open(path) as f:
+        cfg = json.load(f)
+    for ib in cfg.get("inbounds", []):
+        if ib.get("protocol") in ("vmess", "vless", "trojan", "shadowsocks"):
+            clients = ib["settings"].get("clients", [])
+            clients[:] = [c for c in clients if c.get("email") != user]
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    run(["systemctl", "restart", f"xray@{proto}"])
+
+# ---------------- link akun ----------------
+
+def b64(s):
+    import base64
+    return base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
+
+
+def vmess_link(user, secret, domain, tls, net, path, port, ps_suffix):
+    cfg = {
+        "v": "2", "ps": f"{user} {ps_suffix}",
+        "add": domain, "port": str(port), "id": secret,
+        "aid": "0", "net": net, "path": path, "type": "none",
+        "host": domain, "tls": "tls" if tls else "none",
+    }
+    return "vmess://" + b64(json.dumps(cfg, separators=(",", ":")))
+
+
+def vless_link(user, secret, domain, tls, net, path, port, ps_suffix):
+    sec = "tls" if tls else "none"
+    return (f"vless://{secret}@{domain}:{port}"
+            f"?path={path}&security={sec}&encryption=none&type={net}"
+            f"{'&serviceName=vless-grpc&mode=gun' if net == 'grpc' else ''}"
+            f"#{user} {ps_suffix}")
+
+
+def trojan_link(user, secret, domain, tls, net, path, port, ps_suffix):
+    sec = "tls" if tls else "none"
+    return (f"trojan://{secret}@{domain}:{port}"
+            f"?path={path}&security={sec}&type={net}"
+            f"{'&serviceName=trojan-grpc&mode=gun' if net == 'grpc' else ''}"
+            f"#{user} {ps_suffix}")
+
+
+def ss_link(user, secret, domain, tls, path, port, ps_suffix):
+    import base64
+    method = "aes-256-gcm"
+    userinfo = base64.urlsafe_b64encode(f"{method}:{secret}".encode()).decode().rstrip("=")
+    sec = "tls" if tls else "none"
+    return (f"ss://{userinfo}@{domain}:{port}"
+            f"?path={path}&security={sec}&type=ws"
+            f"#{user} {ps_suffix}")
+
+
+def build_links(proto, user, secret):
+    d = get_domain()
+    if proto == "vmess":
+        links = {
+            "vmess_tls_link": vmess_link(user, secret, d, True, "ws", "/vmess", 443, "WS (CDN) TLS"),
+            "vmess_nontls_link": vmess_link(user, secret, d, False, "ws", "/vmess", 80, "WS (CDN) NTLS"),
+            "vmess_grpc_link": vmess_link(user, secret, d, True, "grpc", "vmess-grpc", 443, "gRPC (CDN)"),
+        }
+        return links
+    if proto == "vless":
+        links = {
+            "vless_tls_link": vless_link(user, secret, d, True, "ws", "/vless", 443, "WS (CDN) TLS"),
+            "vless_nontls_link": vless_link(user, secret, d, False, "ws", "/vless", 80, "WS (CDN) NTLS"),
+            "vless_grpc_link": vless_link(user, secret, d, True, "grpc", "vless-grpc", 443, "gRPC (CDN)"),
+        }
+        return links
+    if proto == "trojan":
+        links = {
+            "trojan_tls_link": trojan_link(user, secret, d, True, "ws", "/trojan", 443, "WS (CDN) TLS"),
+            "trojan_nontls_link": trojan_link(user, secret, d, False, "ws", "/trojan", 80, "WS (CDN) NTLS"),
+            "trojan_grpc_link": trojan_link(user, secret, d, True, "grpc", "trojan-grpc", 443, "gRPC (CDN)"),
+        }
+        return links
+    if proto == "shadowsocks":
+        links = {
+            "shadowsocks_tls_link": ss_link(user, secret, d, True, "/ss-ws", 443, "WS (CDN) TLS"),
+            "shadowsocks_nontls_link": ss_link(user, secret, d, False, "/ss-ws", 80, "WS (CDN) NTLS"),
+        }
+        return links
+    return {}
+
+
+# ---------------- operasi ----------------
+
+def valid_user(user):
+    return bool(re.fullmatch(r"[A-Za-z0-9]+", user or ""))
+
+
+def valid_secret(proto, secret, users):
+    """Validasi secret custom. Return None jika OK, atau pesan error.
+    vmess/vless: UUID formal ATAU string custom (huruf/angka/titik/strip/underscore).
+    trojan/shadowsocks: password bebas 1-64 karakter tanpa spasi."""
+    if not secret or len(secret) > 64:
+        return "Secret custom harus 1-64 karakter"
+    if proto in ("vmess", "vless"):
+        if re.fullmatch(r"[0-9a-fA-F-]{36}", secret):
+            try:
+                uuid.UUID(secret)
+            except ValueError:
+                return "Format UUID tidak valid"
+        elif not re.fullmatch(r"[A-Za-z0-9._-]+", secret):
+            return "UUID custom hanya boleh huruf, angka, titik (.), strip (-), underscore (_)"
+    else:  # trojan, shadowsocks
+        if not re.fullmatch(r"\S{1,64}", secret):
+            return "Password custom 1-64 karakter tanpa spasi"
+    for u, (_exp, sec) in users.items():
+        if sec == secret:
+            return f"Secret sudah dipakai akun '{u}'"
+    return None
+
+
+def do_create(proto, user, days, quota_gb, ip_limit, password=None):
+    if proto not in PROTOS:
+        return {"status": "error", "message": "Invalid account type"}
+    if not valid_user(user):
+        return {"status": "error", "message": "Username tidak valid (huruf+angka saja)"}
+    users = db_read(proto)
+    if user in users:
+        return {"status": "error", "message": "Username sudah ada"}
+    exp = expiry_date(days)
+    secret = ""
+    if proto == "ssh":
+        secret = password or secrets.token_urlsafe(12)
+        r = run(["useradd", "-M", "-s", "/bin/false", user])
+        if r.returncode != 0:
+            return {"status": "error", "message": f"useradd gagal: {r.stderr.strip()}"}
+        p = run(["chpasswd"], input=f"{user}:{secret}")
+        if p.returncode != 0:
+            run(["userdel", user])
+            return {"status": "error", "message": "chpasswd gagal"}
+        run(["chage", "-E", exp, user])
+    else:
+        if password:
+            # argumen ke-7 = UUID/password custom untuk vmess/vless/trojan/shadowsocks
+            err = valid_secret(proto, password, users)
+            if err:
+                return {"status": "error", "message": err}
+            secret = password
+        else:
+            secret = str(uuid.uuid4())
+        xray_add_client(proto, user, secret)
+    users[user] = (exp, secret)
+    db_write(proto, users)
+    meta_write(proto, user, quota_gb, ip_limit)
+    data = {
+        "username": user, "expired": exp,
+        "quota": f"{quota_gb} GB", "ip_limit": str(ip_limit),
+        "domain": get_domain(), "pubkey": get_pubkey(),
+    }
+    if proto == "ssh":
+        data["password"] = secret
+    else:
+        data["uuid"] = secret
+        data.update(build_links(proto, user, secret))
+    return {"status": "success", "data": data}
+
+
+def do_suspend(proto, user):
+    """Bekukan akun: hapus dari xray / kunci SSH, tapi data DB dipertahankan."""
+    users = db_read(proto)
+    if user not in users:
+        return {"status": "error", "message": "Username tidak ditemukan"}
+    if proto == "ssh":
+        run(["usermod", "-L", user])
+    else:
+        xray_del_client(proto, user)
+    with open(os.path.join(META_DIR[proto], user + ".suspended"), "w") as f:
+        f.write("suspended")
+    return {"status": "success", "message": f"Akun {user} di-suspend"}
+
+
+def do_unsuspend(proto, user):
+    users = db_read(proto)
+    if user not in users:
+        return {"status": "error", "message": "Username tidak ditemukan"}
+    _exp, secret = users[user]
+    if proto == "ssh":
+        run(["usermod", "-U", user])
+    else:
+        xray_add_client(proto, user, secret)
+    try:
+        os.remove(os.path.join(META_DIR[proto], user + ".suspended"))
+    except OSError:
+        pass
+    return {"status": "success", "message": f"Akun {user} aktif kembali"}
+
+
+def is_suspended(proto, user):
+    return os.path.exists(os.path.join(META_DIR[proto], user + ".suspended"))
+
+
+def do_delete(proto, user):
+    if proto not in PROTOS:
+        return {"status": "error", "message": "Invalid account type"}
+    users = db_read(proto)
+    if user not in users:
+        return {"status": "error", "message": "Username tidak ditemukan"}
+    if proto == "ssh":
+        run(["userdel", "-r", user])
+    else:
+        xray_del_client(proto, user)
+    del users[user]
+    db_write(proto, users)
+    meta_delete(proto, user)
+    return {"status": "success", "message": f"Akun {user} dihapus"}
+
+
+def do_renew(proto, user, days):
+    if proto not in PROTOS:
+        return {"status": "error", "message": "Invalid account type"}
+    users = db_read(proto)
+    if user not in users:
+        return {"status": "error", "message": "Username tidak ditemukan"}
+    old_exp, secret = users[user]
+    try:
+        base = datetime.strptime(old_exp, "%Y-%m-%d").date()
+        if base < date.today():
+            base = date.today()
+    except ValueError:
+        base = date.today()
+    new_exp = (base + timedelta(days=int(days))).isoformat()
+    users[user] = (new_exp, secret)
+    db_write(proto, users)
+    if proto == "ssh":
+        run(["chage", "-E", new_exp, user])
+        run(["usermod", "-U", user])  # pastikan tidak terkunci
+    if is_suspended(proto, user):
+        do_unsuspend(proto, user)
+    return {"status": "success",
+            "data": {"username": user, "expired": new_exp}}
+
+
+def do_check(proto, user):
+    if proto not in PROTOS:
+        return {"status": "error", "message": "Invalid account type"}
+    users = db_read(proto)
+    if user not in users:
+        return {"status": "error", "message": "Username tidak ditemukan"}
+    exp, secret = users[user]
+    quota, iplimit = meta_read(proto, user)
+    data = {"username": user, "expired": exp,
+            "quota": quota, "ip_limit": iplimit,
+            "domain": get_domain(), "pubkey": get_pubkey()}
+    if proto == "ssh":
+        data["password"] = secret
+    else:
+        if secret:
+            data["uuid"] = secret
+        data.update(build_links(proto, user, secret))
+    return {"status": "success", "data": data}
+
+
+def do_list(proto):
+    if proto not in PROTOS:
+        return {"status": "error", "message": "Invalid account type"}
+    users = db_read(proto)
+    return {"status": "success",
+            "data": [{"username": u, "expired": e} for u, (e, _) in users.items()]}
+
+
+DB_LINE_RE = re.compile(r"^### [A-Za-z0-9]+ \d{4}-\d{2}-\d{2}( \S+)?$")
+DB_FILE_PROTO = {".ssh.db": "ssh", ".vmess.db": "vmess", ".vless.db": "vless",
+                 ".trojan.db": "trojan", ".shadowsocks.db": "shadowsocks"}
+BACKUP_DIR = "/var/backups/vpn-panel"
+
+
+def valid_db_file(path):
+    try:
+        with open(path) as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return False, "tidak terbaca"
+    bad = [ln for ln in lines if not DB_LINE_RE.match(ln)]
+    if bad:
+        return False, f"{len(bad)} baris tidak valid"
+    return True, len(lines)
+
+
+def safety_copy():
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(BACKUP_DIR, f"pre-restore-{ts}")
+    os.makedirs(dest, exist_ok=True)
+    for proto, path in DB_PATH.items():
+        if os.path.exists(path):
+            shutil.copy2(path, os.path.join(dest, os.path.basename(path)))
+    return dest
+
+
+def _norm_backup_name(name):
+    """Normalisasi nama member tarball backup.
+
+    Mendukung: backup panel (etc/...), backup FighterTunnel yang dibungkus
+    satu folder top-level (mis. '104.248.156.174-14102026/etc/...'),
+    dan file .db lepas.
+    Kembalikan (jenis, path): 'etc' -> ekstrak ke /<path>,
+    'db' -> salin ke DB_PATH[proto], 'skip' -> abaikan,
+    (None, alasan) -> tolak.
+    """
+    parts = [p for p in name.split("/") if p not in ("", ".")]
+    if not parts:
+        return ("skip", None)
+    if ".." in parts:
+        return (None, f"Path berbahaya: {name}")
+    cands = ["/".join(parts)]
+    if len(parts) > 1:
+        cands.append("/".join(parts[1:]))  # buang 1 folder top-level (format FT)
+    for cand in cands:
+        base = cand.rsplit("/", 1)[-1]
+        if cand == "MANIFEST.txt" or cand.startswith("etc/"):
+            return ("etc", cand)
+        if base in DB_FILE_PROTO:
+            return ("db", cand)
+    return ("skip", None)
+
+
+def do_restore_info(tar_path):
+    """Lihat isi backup tanpa mengekstrak (debug/preview)."""
+    import tarfile
+    if not os.path.isfile(tar_path):
+        return {"status": "error", "message": "File tidak ditemukan"}
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            members = tar.getmembers()
+    except Exception:
+        return {"status": "error", "message": "Bukan file tar.gz valid"}
+    out = {"files": [], "db_files": [], "skipped": []}
+    for m in members:
+        if m.isdir() or not m.isfile():
+            continue
+        jenis, info = _norm_backup_name(m.name)
+        if jenis == "etc":
+            out["files"].append(info)
+            if os.path.basename(info) in DB_FILE_PROTO:
+                out["db_files"].append(info)
+        elif jenis == "db":
+            out["db_files"].append(info + f" -> {DB_PATH[DB_FILE_PROTO[os.path.basename(info)]]}")
+        elif jenis == "skip":
+            out["skipped"].append(m.name)
+        else:
+            out["skipped"].append(m.name + f" [TOLAK: {info}]")
+    return {"status": "success", "data": out}
+
+
+def do_restore(tar_path):
+    """Restore penuh dari file backup .tar.gz (buatan vpn-backup).
+
+    Validasi isi -> amankan DB lama -> ekstrak ke / -> vpnctl resync.
+    Format database identik FighterTunnel, jadi backup FT bisa langsung dipakai
+    selama nama file .db-nya cocok (.<proto>.db / .ssh.db).
+    """
+    import tarfile
+    if not os.path.isfile(tar_path):
+        return {"status": "error", "message": "File tidak ditemukan"}
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            members = tar.getmembers()
+    except Exception:
+        return {"status": "error", "message": "Bukan file tar.gz valid"}
+    plan, skipped = [], []
+    for m in members:
+        if m.issym() or m.islnk():
+            return {"status": "error", "message": f"Link tidak didukung: {m.name}"}
+        if m.isdir() or not m.isfile():
+            continue  # direktori dibuat otomatis
+        jenis, info = _norm_backup_name(m.name)
+        if jenis is None:
+            return {"status": "error", "message": info}
+        if jenis == "skip":
+            skipped.append(m.name)
+            continue
+        plan.append((m, jenis, info))
+    if not any(j == "db" or os.path.basename(p) in DB_FILE_PROTO
+               for _, j, p in plan):
+        return {"status": "error", "message": "Tidak berisi database akun"}
+    safety = safety_copy()
+    with tarfile.open(tar_path, "r:gz") as tar:
+        for m, jenis, arc in plan:
+            f = tar.extractfile(m)
+            if f is None:
+                continue
+            if jenis == "etc":
+                dest = os.path.join("/", arc)
+            else:  # file .db lepas -> taruh di DB_PATH yang benar
+                dest = DB_PATH[DB_FILE_PROTO[os.path.basename(arc)]]
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as out:
+                shutil.copyfileobj(f, out)
+    counts = {}
+    for proto in PROTOS:
+        # pakai db_read (parser yang sama dengan resync) biar konsisten;
+        # valid_db_file terlalu strict untuk format FT yang sedikit beda
+        counts[proto] = len(db_read(proto))
+    resync = do_resync()
+    data = {"safety_dir": safety, "accounts": counts,
+            "resync": resync.get("data", {})}
+    if skipped:
+        data["skipped"] = skipped[:10]
+        data["skipped_total"] = len(skipped)
+    return {"status": "success", "data": data}
+
+
+def do_restoredb(proto, db_file):
+    """Restore satu file database .db untuk satu protokol."""
+    if proto not in PROTOS:
+        return {"status": "error", "message": "Invalid account type"}
+    ok, info = valid_db_file(db_file)
+    if not ok:
+        return {"status": "error", "message": f"File tidak valid: {info}"}
+    safety = safety_copy()
+    shutil.copy2(db_file, DB_PATH[proto])
+    resync = do_resync()
+    return {"status": "success",
+            "data": {"safety_dir": safety, proto: info,
+                     "resync": resync.get("data", {})}}
+
+
+def do_resync():
+    """Sinkron ulang: pastikan setiap akun di DB teks benar-benar aktif.
+
+    - xray (vmess/vless/trojan/shadowsocks): user yang hilang dari
+      config.json ditambahkan lagi (pakai uuid/password dari DB),
+      lalu service direstart bila ada perubahan.
+    - ssh: user Linux yang hilang dibuat ulang (pakai password dari DB).
+    Dipakai setelah restore backup. Tidak menghapus apa pun.
+    """
+    report = {}
+    for proto in PROTOS:
+        users = db_read(proto)
+        added, skipped = 0, 0
+        if proto == "ssh":
+            for user, (exp, secret) in users.items():
+                if run(["id", user]).returncode != 0 and secret:
+                    run(["useradd", "-M", "-s", "/bin/false", user])
+                    run(["chpasswd"], input=f"{user}:{secret}")
+                    run(["chage", "-E", exp, user])
+                    added += 1
+                else:
+                    skipped += 1
+        else:
+            path = XRAY_CONFIG[proto]
+            try:
+                with open(path) as f:
+                    cfg = json.load(f)
+            except (OSError, ValueError):
+                report[proto] = {"error": "config tidak terbaca"}
+                continue
+            changed = False
+            for user, (exp, secret) in users.items():
+                if not secret:
+                    skipped += 1
+                    continue
+                found = False
+                for ib in cfg.get("inbounds", []):
+                    if ib.get("protocol") not in ("vmess", "vless", "trojan", "shadowsocks"):
+                        continue
+                    clients = ib["settings"].setdefault("clients", [])
+                    if any(c.get("email") == user for c in clients):
+                        found = True
+                        break
+                    clients.append(client_object(proto, user, secret))
+                    changed = True
+                if found:
+                    skipped += 1
+                else:
+                    added += 1
+            if changed:
+                with open(path, "w") as f:
+                    json.dump(cfg, f, indent=2)
+                run(["systemctl", "restart", f"xray@{proto}"])
+        report[proto] = {"added": added, "skipped": skipped, "total": len(users)}
+    return {"status": "success", "data": report}
+
+
+def main(argv):
+    if len(argv) < 2:
+        print(__doc__)
+        return 2
+    cmd = argv[1]
+    try:
+        if cmd == "create" and len(argv) >= 7:
+            res = do_create(argv[2], argv[3], argv[4], argv[5], argv[6],
+                            argv[7] if len(argv) > 7 else None)
+        elif cmd == "delete" and len(argv) >= 4:
+            res = do_delete(argv[2], argv[3])
+        elif cmd == "renew" and len(argv) >= 5:
+            res = do_renew(argv[2], argv[3], argv[4])
+        elif cmd == "suspend" and len(argv) >= 4:
+            res = do_suspend(argv[2], argv[3])
+        elif cmd == "unsuspend" and len(argv) >= 4:
+            res = do_unsuspend(argv[2], argv[3])
+        elif cmd == "check" and len(argv) >= 4:
+            res = do_check(argv[2], argv[3])
+        elif cmd == "list" and len(argv) >= 3:
+            res = do_list(argv[2])
+        elif cmd == "resync":
+            res = do_resync()
+        elif cmd == "restore" and len(argv) >= 3:
+            res = do_restore(argv[2])
+        elif cmd == "restore-info" and len(argv) >= 3:
+            res = do_restore_info(argv[2])
+        elif cmd == "restoredb" and len(argv) >= 4:
+            res = do_restoredb(argv[2], argv[3])
+        else:
+            print(__doc__)
+            return 2
+        print(json.dumps(res))
+        return 0 if res.get("status") == "success" else 1
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"status": "error", "message": str(e)}))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
