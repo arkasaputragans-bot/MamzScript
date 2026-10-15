@@ -60,8 +60,7 @@ def ws_to_ssh(client):
     # --- relay RAW TCP ala FighterTunnel (bukan WebSocket framing!) ---
     # Setelah 101, client (DarkTunnel/HTTP Custom) kirim raw SSH bytes.
     # FT terbukti: raw TCP relay, bukan RFC 6455 framing.
-    target.setblocking(False)
-    client.setblocking(False)
+    # Pakai blocking socket + select (aman), hindari BlockingIOError sendall.
     try:
         while True:
             r, _, x = select.select([client, target], [], [client, target], 300)
@@ -80,7 +79,9 @@ def ws_to_ssh(client):
                     return
                 dst = target if sock is client else client
                 try:
-                    dst.sendall(data)
+                    while data:
+                        n = dst.send(data)
+                        data = data[n:]
                 except OSError:
                     return
     finally:
