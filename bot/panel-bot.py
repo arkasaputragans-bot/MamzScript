@@ -359,9 +359,13 @@ def restore_report(res, fname):
     skip_note = ""
     if d.get("skipped"):
         skip_note = f"\n\u26a0\ufe0f {d.get('skipped_total', len(d['skipped']))} file diabaikan."
+    pw_note = ""
+    if d.get("ssh_password_restored"):
+        pw_note = (f"\n\U0001f511 {d['ssh_password_restored']} password SSH "
+                   "dipulihkan dari backup.")
     return (f"\u2705 *Restore selesai!*\n\U0001f4e6 Sumber: `{fname}`\n"
             f"\U0001f6df DB lama diamankan di `{d.get('safety_dir', '-')}`\n"
-            f"\U0001f465 {acc_line}{skip_note}\n\n"
+            f"\U0001f465 {acc_line}{skip_note}{pw_note}\n\n"
             f"{resync_report({'status': 'success', 'data': d.get('resync', {})})}\n\n"
             f"_Kirim file `.tar.gz` backup atau file `.db` untuk restore._")
 
