@@ -233,7 +233,8 @@ mkdir -p /etc/vpn-panel
 [ -f /etc/vpn-panel/bot.env ] || printf "# Isi dengan token dari @BotFather dan ID Telegram admin\nBOT_TOKEN=\nADMIN_IDS=\n" > /etc/vpn-panel/bot.env
 chmod 600 /etc/vpn-panel/bot.env
 if ! python3 -c "import telegram" 2>/dev/null; then
-  pip3 install --break-system-packages "python-telegram-bot>=20" 2>&1 | tail -2
+  pip3 install --break-system-packages "python-telegram-bot>=20" 2>&1 | tail -2 \
+    || pip3 install --break-system-packages --ignore-installed "python-telegram-bot>=20" 2>&1 | tail -2
 fi
 python3 -c "import telegram" 2>/dev/null \
   && echo "  python-telegram-bot OK" \
