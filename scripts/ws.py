@@ -70,13 +70,21 @@ def ws_to_ssh(client):
         if len(req) > 16384:
             return
     key = None
+    has_upgrade = False
     for line in req.decode("latin1").split("\r\n"):
-        if line.lower().startswith("sec-websocket-key:"):
+        ll = line.lower()
+        if ll.startswith("sec-websocket-key:"):
             key = line.split(":", 1)[1].strip()
-            break
+        elif ll.startswith("upgrade:") and "websocket" in ll:
+            has_upgrade = True
     if not key:
-        client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
-        return
+        # Kompatibel FighterTunnel & payload bug-host: tanpa Sec-WebSocket-Key
+        # pun tetap 101 (dummy accept), asal ada header Upgrade: websocket.
+        # Tanpa header Upgrade sama sekali -> 400 (bukan klien WS).
+        if not has_upgrade:
+            client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+            return
+        key = "dGhlIHNhbXBsZSBub25jZQ=="  # dummy biar accept valid
     accept = base64.b64encode(
         hashlib.sha1((key + GUID).encode()).digest()
     ).decode()
