@@ -109,6 +109,28 @@ if [ "$EDGE_MP" = "YES" ]; then
   echo "  migrasi edge.json: catch-all -> nginx multipath :10009, restart xray@edge"
   systemctl restart xray@edge
 fi
+# migrasi: fallback /ssh-ws -> ws.py :10020 (SSH over WS via 443)
+EDGE_SSHWS="$(python3 -c "
+import json
+p = '/etc/xray/edge/config.json'
+try:
+    cfg = json.load(open(p))
+    ib = cfg['inbounds'][0]
+    fb = ib.get('settings', {}).get('fallbacks', [])
+    if any(f.get('path') == '/ssh-ws' for f in fb):
+        print('OK')
+    else:
+        idx = next((i for i, f in enumerate(fb) if 'path' not in f), len(fb))
+        fb.insert(idx, {'path': '/ssh-ws', 'dest': 10020})
+        json.dump(cfg, open(p, 'w'))
+        print('YES')
+except Exception:
+    pass
+" 2>/dev/null)"
+if [ "$EDGE_SSHWS" = "YES" ]; then
+  echo "  migrasi edge.json: fallback /ssh-ws -> :10020 ditambahkan, restart xray@edge"
+  systemctl restart xray@edge
+fi
 
 log "[3/10] HAProxy + nginx"
 cp haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg
