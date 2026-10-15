@@ -587,24 +587,39 @@ def do_restore(tar_path):
         # valid_db_file terlalu strict untuk format FT yang sedikit beda
         counts[proto] = len(db_read(proto))
     resync = do_resync()
-    # Gabungkan hash password SSH dari backup: user dibuat ulang bila hilang,
-    # password asli (hash) dipasang via chpasswd -e. /etc/shadow sistem
-    # TIDAK pernah ditimpa utuh.
+    # Restore SSH dari backup FT: user dibuat ulang bila hilang.
+    # - Kalau hash password ada di shadow backup -> pakai hash asli (chpasswd -e),
+    #   password lama tetap berlaku.
+    # - Kalau tidak ada -> generate password baru acak, catat untuk user.
+    # /etc/shadow sistem TIDAK pernah ditimpa utuh.
+    import secrets, string
     ssh_restored = 0
+    ssh_new_passwords = {}
     for user, (exp, _secret) in db_read("ssh").items():
-        h = shadow_hashes.get(user)
-        if not h:
-            continue
+        # Buat user Linux bila belum ada (nama aneh pakai --badnames)
         if run(["id", user]).returncode != 0:
-            run(["useradd", "-M", "-s", "/bin/false", user])
-        if run(["chpasswd", "-e"], input=f"{user}:{h}").returncode == 0:
-            if exp:
-                run(["chage", "-E", exp, user])
-            ssh_restored += 1
+            r = run(["useradd", "-M", "-s", "/bin/false", user])
+            if r.returncode != 0:
+                run(["useradd", "--badnames", "-M", "-s", "/bin/false", user])
+        h = shadow_hashes.get(user)
+        if h:
+            # Pakai hash asli dari backup
+            if run(["chpasswd", "-e"], input=f"{user}:{h}").returncode == 0:
+                ssh_restored += 1
+        else:
+            # Generate password baru
+            pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+            if run(["chpasswd"], input=f"{user}:{pw}").returncode == 0:
+                ssh_new_passwords[user] = pw
+                ssh_restored += 1
+        if exp:
+            run(["chage", "-E", exp, user])
     data = {"safety_dir": safety, "accounts": counts,
             "resync": resync.get("data", {})}
     if ssh_restored:
         data["ssh_password_restored"] = ssh_restored
+    if ssh_new_passwords:
+        data["ssh_new_passwords"] = ssh_new_passwords
     if skipped:
         data["skipped"] = skipped[:10]
         data["skipped_total"] = len(skipped)

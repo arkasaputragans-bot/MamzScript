@@ -361,8 +361,11 @@ def restore_report(res, fname):
         skip_note = f"\n\u26a0\ufe0f {d.get('skipped_total', len(d['skipped']))} file diabaikan."
     pw_note = ""
     if d.get("ssh_password_restored"):
-        pw_note = (f"\n\U0001f511 {d['ssh_password_restored']} password SSH "
-                   "dipulihkan dari backup.")
+        pw_note = (f"\n\U0001f511 {d['ssh_password_restored']} akun SSH aktif.")
+    if d.get("ssh_new_passwords"):
+        pw_lines = "\n".join(f"`{u}`: `{pw}`" for u, pw in d["ssh_new_passwords"].items())
+        pw_note += (f"\n\n\U0001f50f Password baru (tidak ada di backup):\n{pw_lines}"
+                    f"\n_Teruskan ke pelanggan masing-masing._")
     return (f"\u2705 *Restore selesai!*\n\U0001f4e6 Sumber: `{fname}`\n"
             f"\U0001f6df DB lama diamankan di `{d.get('safety_dir', '-')}`\n"
             f"\U0001f465 {acc_line}{skip_note}{pw_note}\n\n"
