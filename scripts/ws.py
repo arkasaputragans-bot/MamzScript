@@ -6,8 +6,6 @@ Setelah jawab 101, lakukan RAW TCP relay (bukan WebSocket RFC 6455 framing).
 """
 import socket
 import threading
-import base64
-import hashlib
 import select
 
 LISTEN_HOST = "127.0.0.1"
@@ -37,22 +35,13 @@ def ws_to_ssh(client):
     except (socket.timeout, OSError):
         pass
     client.settimeout(None)
-    # Cari key kalau ada, kalau tidak pakai dummy (ala FT: "foo")
-    key = None
-    for line in req.decode("latin1").split("\r\n"):
-        if line.lower().startswith("sec-websocket-key:"):
-            key = line.split(":", 1)[1].strip()
-            break
-    if not key:
-        key = "dGhlIHNhbXBsZSBub25jZQ=="
-    accept = base64.b64encode(
-        hashlib.sha1((key + GUID).encode()).digest()
-    ).decode()
+    # Response byte-identik dengan FighterTunnel (termasuk typo "Protocol" singular)
+    # FT: HTTP/1.1 101 Switching Protocol + Sec-WebSocket-Accept: foo
     client.sendall(
-        ("HTTP/1.1 101 Switching Protocols\r\n"
-         "Upgrade: websocket\r\n"
-         "Connection: Upgrade\r\n"
-         f"Sec-WebSocket-Accept: {accept}\r\n\r\n").encode()
+        b"HTTP/1.1 101 Switching Protocol\r\n"
+        b"Upgrade: websocket\r\n"
+        b"Connection: Upgrade\r\n"
+        b"Sec-WebSocket-Accept: foo\r\n\r\n"
     )
 
     target = socket.create_connection((TARGET_HOST, TARGET_PORT), timeout=10)
