@@ -27,7 +27,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq haproxy nginx curl wget unzip python3 \
   python3-pip sqlite3 cron iptables iproute2 dnsutils socat netcat-openbsd \
-  cmake build-essential git zlib1g-dev bzip2
+  cmake build-essential git zlib1g-dev bzip2 at
 
 log "[2/10] Xray-core"
 if [ ! -x /usr/local/bin/xray ]; then

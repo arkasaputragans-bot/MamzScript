@@ -368,6 +368,28 @@ def is_suspended(proto, user):
     return os.path.exists(os.path.join(META_DIR[proto], user + ".suspended"))
 
 
+def do_trial(proto, user, minutes, quota_gb=1, ip_limit=1, password=None):
+    """Buat akun trial yang auto-hapus setelah X menit."""
+    import subprocess as _sp
+    minutes = int(minutes)
+    if minutes < 1 or minutes > 1440:
+        return {"status": "error", "message": "Menit harus 1-1440 (max 24 jam)"}
+    # Buat akun dengan expiry 1 hari sebagai fallback
+    r = do_create(proto, user, 1, quota_gb, ip_limit, password)
+    if r.get("status") != "ok":
+        return r
+    # Jadwalkan hapus otomatis pakai 'at'
+    try:
+        _sp.run(["which", "at"], capture_output=True, check=True)
+        _sp.run(["bash", "-c", f"echo '/usr/local/bin/vpnctl delete {proto} {user}' | at now + {minutes} minutes"],
+                capture_output=True, text=True)
+        r["trial_minutes"] = minutes
+        r["message"] = f"Akun trial {minutes} menit dibuat, auto-hapus setelah {minutes} menit"
+    except Exception as e:
+        r["trial_warning"] = f"Akun dibuat tapi auto-hapus gagal: {e}"
+    return r
+
+
 def do_delete(proto, user):
     if proto not in PROTOS:
         return {"status": "error", "message": "Invalid account type"}
@@ -725,6 +747,10 @@ def main(argv):
                             argv[7] if len(argv) > 7 else None)
         elif cmd == "delete" and len(argv) >= 4:
             res = do_delete(argv[2], argv[3])
+        elif cmd == "trial" and len(argv) >= 5:
+            res = do_trial(argv[2], argv[3], argv[4],
+                           float(argv[5]) if len(argv) > 5 else 1,
+                           int(argv[6]) if len(argv) > 6 else 1)
         elif cmd == "renew" and len(argv) >= 5:
             res = do_renew(argv[2], argv[3], argv[4])
         elif cmd == "suspend" and len(argv) >= 4:

@@ -219,6 +219,39 @@ def menu_buat():
     pause()
 
 
+def menu_trial():
+    proto = pilih_protokol()
+    if not proto:
+        return
+    print(f"\n  Buat akun TRIAL {LABEL[proto]} (auto-hapus)")
+    while True:
+        user = ask("Username (huruf+angka)")
+        if user.isalnum():
+            break
+        print("  ❌ Username hanya huruf dan angka.")
+    menit = ask_int("Durasi trial (menit, 1-1440)", "60")
+    if menit < 1:
+        menit = 1
+    if menit > 1440:
+        menit = 1440
+    if proto == "ssh":
+        iplimit = ask_int("Limit IP (0=unlimited)", "0")
+        args = ["trial", "ssh", user, str(menit), "0", str(iplimit)]
+    else:
+        quota = ask("Kuota GB (0=unlimited)", "1")
+        iplimit = ask_int("Limit IP (0=unlimited)", "1")
+        args = ["trial", proto, user, str(menit), quota, str(iplimit)]
+    print("  ⏳ Memproses...")
+    res = vpnctl(*args)
+    if res.get("status") == "ok":
+        print(f"  ✅ {res.get('message')}")
+        if res.get("data"):
+            tampil_akun(proto, res["data"])
+    else:
+        print(f"  ❌ Gagal: {res.get('message')}")
+    pause()
+
+
 def menu_hapus():
     proto = pilih_protokol()
     if not proto:
@@ -321,7 +354,7 @@ def menu_pengaturan():
         print("   0. Kembali")
         print("  " + "-" * 42)
         v = ask("Pilih").strip()
-        if v in ("0", "1", "2", "3", "4", "5", "6", "7"):
+        if v in ("0", "1", "2", "3", "4", "5", "6", "7", "9"):
             salah = 0
         if v == "1":
             domain_tls_allinone()
@@ -667,13 +700,16 @@ def main():
         print("   6. Suspend / unsuspend akun")
         print("   7. Status service")
         print("   8. ⚙️  Pengaturan")
+        print("   9. 🧪 Buat akun trial (menit)")
         print("   0. Keluar")
         print("  " + "-" * 42)
-        v = ask("Pilih [0-8]").strip()
+        v = ask("Pilih [0-9]").strip()
         if v in ("0", "1", "2", "3", "4", "5", "6", "7"):
             salah = 0
         if v == "1":
             menu_buat()
+        elif v == "9":
+            menu_trial()
         elif v == "2":
             menu_hapus()
         elif v == "3":
