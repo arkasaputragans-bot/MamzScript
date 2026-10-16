@@ -417,7 +417,7 @@ async def backup_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tail = _md_escape("\n".join(p.stdout.strip().splitlines()[-6:]))
         if p.returncode == 0:
             await update.message.reply_text(
-                f"✅ *Backup selesai.*\n```\n{tail}\n```\n_File dikirim ke Telegram bila BOT_TOKEN terisi._",
+                f"✅ *Backup selesai.*\n```\n{tail}\n```\nFile dikirim ke Telegram bila BOT\_TOKEN terisi.",
                 parse_mode="Markdown")
         else:
             await update.message.reply_text(f"❌ Backup gagal:\n```\n{tail}\n```",
