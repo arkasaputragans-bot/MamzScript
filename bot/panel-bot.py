@@ -366,8 +366,8 @@ def restore_report(res, fname):
         pw_lines = "\n".join(f"`{u}`: `{pw}`" for u, pw in d["ssh_new_passwords"].items())
         pw_note += (f"\n\n\U0001f50f Password baru (tidak ada di backup):\n{pw_lines}"
                     f"\n_Teruskan ke pelanggan masing-masing._")
-    return (f"\u2705 *Restore selesai!*\n\U0001f4e6 Sumber: `{fname}`\n"
-            f"\U0001f6df DB lama diamankan di `{d.get('safety_dir', '-')}`\n"
+    return (f"\u2705 *Restore selesai!*\n\U0001f4e6 Sumber: `{_md_escape(fname)}`\n"
+            f"\U0001f6df DB lama diamankan di `{_md_escape(d.get('safety_dir', '-'))}`\n"
             f"\U0001f465 {acc_line}{skip_note}{pw_note}\n\n"
             f"{resync_report({'status': 'success', 'data': d.get('resync', {})})}\n\n"
             f"_Kirim file `.tar.gz` backup atau file `.db` untuk restore._")
@@ -400,6 +400,13 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _md_escape(text):
+    """Escape karakter spesial Markdown Telegram."""
+    for ch in ("_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"):
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
 async def backup_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -407,7 +414,7 @@ async def backup_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         p = subprocess.run(["/usr/local/bin/vpn-backup"], capture_output=True,
                            text=True, timeout=300)
-        tail = "\n".join(p.stdout.strip().splitlines()[-6:])
+        tail = _md_escape("\n".join(p.stdout.strip().splitlines()[-6:]))
         if p.returncode == 0:
             await update.message.reply_text(
                 f"✅ *Backup selesai.*\n```\n{tail}\n```\n_File dikirim ke Telegram bila BOT_TOKEN terisi._",
