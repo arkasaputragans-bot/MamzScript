@@ -28,7 +28,7 @@ import tempfile
 import urllib.request
 
 BACKUP_DIR = "/var/backups/vpn-panel"
-KEEP_LOCAL = 7
+KEEP_LOCAL = 24
 BOT_ENV = "/etc/vpn-panel/bot.env"
 LOG_FILE = "/var/log/vpn-backup.log"
 

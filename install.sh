@@ -275,9 +275,9 @@ ln -sf /usr/local/bin/vpn-menu /usr/local/bin/menu
 install -m 755 scripts/vpn-backup /usr/local/bin/vpn-backup
 install -m 755 scripts/vpn-quota.py /usr/local/bin/vpn-quota.py
 mkdir -p /var/backups/vpn-panel
-# cron backup harian jam 03:00 (bisa diubah/dimatikan via menu > 8 > 7 > 2)
+# cron backup tiap jam menit 00 (bisa diubah/dimatikan via menu > 8 > 7 > 2)
 if [ ! -f /etc/cron.d/vpn-backup ]; then
-  printf '# Backup akun VPN otomatis (dibuat via menu)\n0 3 * * * root /usr/local/bin/vpn-backup\n' > /etc/cron.d/vpn-backup
+  printf '# Backup akun VPN otomatis (dibuat via menu)\n0 * * * * root /usr/local/bin/vpn-backup\n' > /etc/cron.d/vpn-backup
   chmod 644 /etc/cron.d/vpn-backup
 fi
 

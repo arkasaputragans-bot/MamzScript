@@ -243,8 +243,10 @@ def menu_trial():
         args = ["trial", proto, user, str(menit), quota, str(iplimit)]
     print("  ⏳ Memproses...")
     res = vpnctl(*args)
-    if res.get("status") == "ok":
+    if res.get("status") == "success":
         print(f"  ✅ {res.get('message')}")
+        if res.get("trial_warning"):
+            print(f"  ⚠️  {res.get('trial_warning')}")
         if res.get("data"):
             tampil_akun(proto, res["data"])
     else:
@@ -621,21 +623,36 @@ def backup_jadwal():
         with open(BACKUP_CRON) as f:
             for line in f:
                 if "vpn-backup" in line and not line.startswith("#"):
-                    cur = line.split()[1]  # jam
+                    parts = line.split()
+                    # 0 * * * * = per jam, 0 3 * * * = harian jam 3
+                    cur = "perjam" if parts[1] == "*" else parts[1]
     except OSError:
         pass
-    print(f"  Jadwal sekarang: {'tiap hari jam ' + cur + ':00' if cur else '(mati)'}")
-    v = ask("Jam backup harian (0-23), atau 'off' untuk matikan", cur or "3")
+    if cur == "perjam":
+        jadwal_txt = "tiap jam menit 00"
+    elif cur:
+        jadwal_txt = f"tiap hari jam {cur}:00"
+    else:
+        jadwal_txt = "(mati)"
+    print(f"  Jadwal sekarang: {jadwal_txt}")
+    print("  Pilihan: 'jam' = tiap jam menit 00, '0'-'23' = harian jam tsb, 'off' = matikan")
+    v = ask("Pilih jadwal", "jam")
     if v.lower() == "off":
         try:
             os.remove(BACKUP_CRON)
         except OSError:
             pass
         print("  ✅ Backup otomatis dimatikan.")
+    elif v.lower() in ("jam", "perjam", "hourly"):
+        with open(BACKUP_CRON, "w") as f:
+            f.write("# Backup akun VPN otomatis (dibuat via menu)\n"
+                    "0 * * * * root /usr/local/bin/vpn-backup\n")
+        os.chmod(BACKUP_CRON, 0o644)
+        print("  ✅ Backup otomatis tiap jam menit 00.")
     elif v.isdigit() and 0 <= int(v) <= 23:
         with open(BACKUP_CRON, "w") as f:
             f.write(f"# Backup akun VPN otomatis (dibuat via menu)\n"
-                    f"{int(v)} * * * * root /usr/local/bin/vpn-backup\n")
+                    f"0 {int(v)} * * * root /usr/local/bin/vpn-backup\n")
         os.chmod(BACKUP_CRON, 0o644)
         print(f"  ✅ Backup otomatis tiap hari jam {int(v)}:00.")
     else:
