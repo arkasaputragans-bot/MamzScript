@@ -69,7 +69,10 @@ class Server(threading.Thread):
     def removeConn(self, conn):
         try:
             self.threadsLock.acquire()
-            self.threads.remove(conn)
+            try:
+                self.threads.remove(conn)
+            except ValueError:
+                pass
         finally:
             self.threadsLock.release()
 
