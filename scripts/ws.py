@@ -209,6 +209,7 @@ class ConnectionHandler(threading.Thread):
 
                             count = 0
                         else:
+                            error = True
                             break
                     except:
                         error = True

@@ -8,6 +8,7 @@ User=root
 ExecStart=/usr/bin/python3 /usr/local/bin/ws.py
 Restart=on-failure
 RestartSec=3
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

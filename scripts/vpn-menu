@@ -454,6 +454,16 @@ def setting_bot():
         _os.chmod(env_path, 0o600)
         print("  ✅ Disimpan.")
     if cfg.get("BOT_TOKEN"):
+        # Safeguard: pastikan python-telegram-bot terpasang (jaga-jaga kalau install.sh kelewat)
+        try:
+            import importlib.util as _ilu
+            if _ilu.find_spec("telegram") is None:
+                print("  📦 python-telegram-bot belum ada, menginstall...")
+                subprocess.run(["pip3", "install", "--break-system-packages",
+                                "--ignore-installed", "python-telegram-bot>=20"],
+                               capture_output=True, text=True)
+        except Exception:
+            pass
         subprocess.run(["systemctl", "enable", "--now", "panel-bot"],
                        capture_output=True, text=True)
         st = subprocess.run(["systemctl", "is-active", "panel-bot"],
