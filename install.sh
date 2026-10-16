@@ -172,6 +172,8 @@ rm -f /etc/nginx/sites-enabled/*
 cp nginx/panel.conf /etc/nginx/sites-enabled/panel.conf
 # SSH-WS via nginx :1010 ala FighterTunnel (haproxy -> :1010 -> ws.py :10020)
 cp nginx/sshws.conf /etc/nginx/conf.d/sshws.conf
+# Naikkan worker_connections agar tidak jadi bottleneck (default 768 terlalu kecil)
+sed -i 's/worker_connections .*/worker_connections 4096;/' /etc/nginx/nginx.conf
 mkdir -p /var/www/html/panel
 cp web/index.html web/style.css web/app.js /var/www/html/panel/
 chmod -R a+rX /var/www/html/panel  # nginx (www-data) harus bisa baca file web UI
