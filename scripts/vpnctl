@@ -376,13 +376,15 @@ def do_trial(proto, user, minutes, quota_gb=1, ip_limit=1, password=None):
         return {"status": "error", "message": "Menit harus 1-1440 (max 24 jam)"}
     # Buat akun dengan expiry 1 hari sebagai fallback
     r = do_create(proto, user, 1, quota_gb, ip_limit, password)
-    if r.get("status") != "ok":
+    if r.get("status") != "success":
         return r
     # Jadwalkan hapus otomatis pakai 'at'
     try:
         _sp.run(["which", "at"], capture_output=True, check=True)
-        _sp.run(["bash", "-c", f"echo '/usr/local/bin/vpnctl delete {proto} {user}' | at now + {minutes} minutes"],
-                capture_output=True, text=True)
+        _sp.run(["bash", "-c",
+                 "set -o pipefail; "
+                 f"echo '/usr/local/bin/vpnctl delete {proto} {user}' | at now + {minutes} minutes"],
+                capture_output=True, text=True, check=True)
         r["trial_minutes"] = minutes
         r["message"] = f"Akun trial {minutes} menit dibuat, auto-hapus setelah {minutes} menit"
     except Exception as e:

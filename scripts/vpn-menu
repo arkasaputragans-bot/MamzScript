@@ -229,7 +229,7 @@ def menu_trial():
         if user.isalnum():
             break
         print("  ❌ Username hanya huruf dan angka.")
-    menit = ask_int("Durasi trial (menit, 1-1440)", "60")
+    menit = int(ask_int("Durasi trial (menit, 1-1440)", "60"))
     if menit < 1:
         menit = 1
     if menit > 1440:

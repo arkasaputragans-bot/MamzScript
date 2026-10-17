@@ -273,6 +273,8 @@ install -m 755 scripts/vpnctl /usr/local/bin/vpnctl
 install -m 755 scripts/vpn-menu /usr/local/bin/vpn-menu
 ln -sf /usr/local/bin/vpn-menu /usr/local/bin/menu
 install -m 755 scripts/vpn-backup /usr/local/bin/vpn-backup
+# 'at' dipakai fitur trial (auto-hapus); pastikan daemon-nya jalan & aktif tiap boot
+systemctl enable --now atd 2>/dev/null || true
 install -m 755 scripts/vpn-quota.py /usr/local/bin/vpn-quota.py
 mkdir -p /var/backups/vpn-panel
 # cron backup tiap jam menit 00 (bisa diubah/dimatikan via menu > 8 > 7 > 2)
