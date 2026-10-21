@@ -1,0 +1,14 @@
+[Unit]
+Description=VPN Panel 443 catch-all mux (SSH mentah -> dropbear, HTTP -> nginx multipath)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/mux.py
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

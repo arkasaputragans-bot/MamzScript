@@ -83,7 +83,7 @@ if [ "$EDGE_MIGRATED" = "YES" ]; then
   echo "  migrasi edge.json: fallback /api/ ditambahkan, restart xray@edge"
   systemctl restart xray@edge
 fi
-# migrasi: multi path zero-config — catch-all edge -> nginx 10009
+# migrasi: multi path zero-config — catch-all edge -> vpn-mux :10017 (terusan akhir ke nginx :10009)
 # (/whatever/vmess -> rewrite ke /vmess -> xray inner)
 EDGE_MP="$(python3 -c "
 import json
@@ -92,11 +92,11 @@ try:
     cfg = json.load(open(p))
     ib = cfg['inbounds'][0]
     fb = ib.get('fallbacks', []) or ib.get('settings', {}).get('fallbacks', [])
-    fb = [f for f in fb if not (f.get('dest') == 10009 and 'path' in f)]
+    fb = [f for f in fb if not (f.get('dest') in (10009, 10017) and 'path' in f)]
     changed = False
     for f in fb:
-        if 'path' not in f and f.get('dest') != 10009:
-            f['dest'] = 10009
+        if 'path' not in f and f.get('dest') != 10017:
+            f['dest'] = 10017
             changed = True
     ib.pop('fallbacks', None)
     ib.setdefault('settings', {})['fallbacks'] = fb
@@ -106,7 +106,7 @@ except Exception:
     pass
 " 2>/dev/null)"
 if [ "$EDGE_MP" = "YES" ]; then
-  echo "  migrasi edge.json: catch-all -> nginx multipath :10009, restart xray@edge"
+  echo "  migrasi edge.json: catch-all -> vpn-mux :10017, restart xray@edge"
   systemctl restart xray@edge
 fi
 # migrasi: fallback /ssh-ws -> ws.py :10020 direct (SSH over WS via 443).
@@ -139,7 +139,7 @@ if [ "$EDGE_SSHWS" = "YES" ]; then
   echo "  migrasi edge.json: fallback /ssh-ws + /fightertunnelssh -> :10020, restart xray@edge"
   systemctl restart xray@edge
 fi
-# migrasi: catch-all 443 -> nginx multipath :10009
+# migrasi: catch-all 443 -> vpn-mux :10017 (SSH mentah -> dropbear, HTTP -> nginx multipath :10009)
 # (/whatever/<proto> -> rewrite ke canonical -> xray inner;
 #  path lain -> catch-all nginx -> ws.py :10020, bug-host tetap jalan)
 EDGE_CATCHALL="$(python3 -c "
@@ -149,18 +149,18 @@ try:
     cfg = json.load(open(p))
     fb = cfg['inbounds'][0]['settings']['fallbacks']
     cur = next((f for f in fb if 'path' not in f), None)
-    if cur and cur.get('dest') == 10009:
+    if cur and cur.get('dest') == 10017:
         print('OK')
     else:
         if cur:
-            cur['dest'] = 10009
+            cur['dest'] = 10017
         json.dump(cfg, open(p, 'w'))
         print('YES')
 except Exception:
     pass
 " 2>/dev/null)"
 if [ "$EDGE_CATCHALL" = "YES" ]; then
-  echo "  migrasi edge.json: catch-all -> nginx multipath :10009, restart xray@edge"
+  echo "  migrasi edge.json: catch-all -> vpn-mux :10017, restart xray@edge"
   systemctl restart xray@edge
 fi
 
@@ -229,9 +229,11 @@ WantedBy=multi-user.target
 EOF
 install -m 755 scripts/ws.py /usr/local/bin/ws.py
 cp systemd/vpn-ws.service /etc/systemd/system/
+install -m 755 scripts/mux.py /usr/local/bin/mux.py
+cp systemd/vpn-mux.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable vpn-ws dropbear
-systemctl restart vpn-ws dropbear
+systemctl enable vpn-ws vpn-mux dropbear
+systemctl restart vpn-ws vpn-mux dropbear
 
 log "[5/10] badvpn-udpgw (opsional)"
 if [ ! -x /usr/local/bin/badvpn-udpgw ]; then
@@ -312,7 +314,7 @@ fi
 
 log "[9/10] Verifikasi service"
 for s in xray@edge xray@vmess xray@vless xray@trojan xray@shadowsocks \
-         haproxy nginx dropbear vpn-ws panel-api vpn-quota; do
+         haproxy nginx dropbear vpn-ws vpn-mux panel-api vpn-quota; do
   printf "%-18s %s\n" "$s" "$(systemctl is-active "$s")"
 done
 
