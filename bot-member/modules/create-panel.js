@@ -155,10 +155,21 @@ async function doTrial(proto, params, serverId, minutes) {
       `💡 *Cara Pakai:*\n` +
       `Isi Hostname dengan domain di atas, Username & Password sesuai akun ini.\n` +
       `Untuk payload/bug SNI gunakan host sesuai operator kamu.\n`;
-  } else if (proto === 'vmess' || proto === 'vless') {
-    msg += `🔑 UUID : \`${d.uuid || ''}\`\n\n` + linkBlock(d, ['tls', 'none', 'http80']);
+  } else if (proto === 'vmess') {
+    msg += `🆔 UUID : \`${d.uuid || ''}\`\n━━━━━━━━━━━━━━━━━━\n`;
+    msg += linkBlock('Link TLS (WS)', d.vmess_tls_link);
+    msg += linkBlock('Link NONTLS (WS)', d.vmess_nontls_link);
+    msg += linkBlock('Link gRPC', d.vmess_grpc_link);
+  } else if (proto === 'vless') {
+    msg += `🆔 UUID : \`${d.uuid || ''}\`\n━━━━━━━━━━━━━━━━━━\n`;
+    msg += linkBlock('Link TLS (WS)', d.vless_tls_link);
+    msg += linkBlock('Link NONTLS (WS)', d.vless_nontls_link);
+    msg += linkBlock('Link gRPC', d.vless_grpc_link);
   } else if (proto === 'trojan') {
-    msg += `🔑 Password : \`${d.uuid || ''}\`\n\n` + linkBlock(d, ['tls', 'none']);
+    msg += `🔑 Password : \`${d.uuid || ''}\`\n━━━━━━━━━━━━━━━━━━\n`;
+    msg += linkBlock('Link TLS (WS)', d.trojan_tls_link);
+    msg += linkBlock('Link NONTLS (WS)', d.trojan_nontls_link);
+    msg += linkBlock('Link gRPC', d.trojan_grpc_link);
   }
   return msg.trim();
 }
