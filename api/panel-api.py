@@ -19,7 +19,7 @@ Endpoint:
 import json
 import os
 import subprocess
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 PORT = 5888
@@ -67,6 +67,7 @@ def enrich(data):
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 30  # koneksi nggantung dibuang dlm 30s — jangan sampai memblokir API
     server_version = "VPNPanel/1.0"
 
     def log_message(self, fmt, *args):
@@ -237,7 +238,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    srv = HTTPServer(("0.0.0.0", PORT), Handler)
+    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    srv.daemon_threads = True
     print(f"VPN panel API listening on :{PORT}", flush=True)
     srv.serve_forever()
 
