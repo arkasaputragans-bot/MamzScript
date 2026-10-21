@@ -139,9 +139,9 @@ if [ "$EDGE_SSHWS" = "YES" ]; then
   echo "  migrasi edge.json: fallback /ssh-ws + /fightertunnelssh -> :10020, restart xray@edge"
   systemctl restart xray@edge
 fi
-# migrasi: catch-all 443 -> ws.py :10020 direct (bug-host payload, ala FighterTunnel)
-# Catatan: multipath 443 (/whatever/vmess) tetap via nginx :10009 di port 80;
-# di 443, prioritas ke kompatibilitas bug-host.
+# migrasi: catch-all 443 -> nginx multipath :10009
+# (/whatever/<proto> -> rewrite ke canonical -> xray inner;
+#  path lain -> catch-all nginx -> ws.py :10020, bug-host tetap jalan)
 EDGE_CATCHALL="$(python3 -c "
 import json
 p = '/etc/xray/edge/config.json'
@@ -149,18 +149,18 @@ try:
     cfg = json.load(open(p))
     fb = cfg['inbounds'][0]['settings']['fallbacks']
     cur = next((f for f in fb if 'path' not in f), None)
-    if cur and cur.get('dest') == 10020:
+    if cur and cur.get('dest') == 10009:
         print('OK')
     else:
         if cur:
-            cur['dest'] = 10020
+            cur['dest'] = 10009
         json.dump(cfg, open(p, 'w'))
         print('YES')
 except Exception:
     pass
 " 2>/dev/null)"
 if [ "$EDGE_CATCHALL" = "YES" ]; then
-  echo "  migrasi edge.json: catch-all -> :10020, restart xray@edge"
+  echo "  migrasi edge.json: catch-all -> nginx multipath :10009, restart xray@edge"
   systemctl restart xray@edge
 fi
 
