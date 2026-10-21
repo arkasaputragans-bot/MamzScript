@@ -116,6 +116,77 @@ async function doCreate(proto, endpoint, params, serverId) {
   return msg.trim();
 }
 
+function trialHeader(proto, d, minutes) {
+  return `✅ *${proto} TRIAL BERHASIL DIBUAT*\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `👤 Username : \`${d.username}\`\n` +
+    `🌐 Domain : \`${d.domain || '-'}\`\n` +
+    `⏰ Durasi : \`${minutes} Menit\` (otomatis terhapus)\n` +
+    `📊 Quota : \`${d.quota || '-'}\`\n` +
+    `🔢 Limit IP : \`${d.ip_limit || '-'}\`\n` +
+    `━━━━━━━━━━━━━━━━━━\n`;
+}
+
+// Trial berbasis menit via endpoint panel /trial<proto> (auto-hapus di server).
+// Panel versi lama (belum ada endpoint trial) -> fallback create biasa exp 1 hari.
+async function doTrial(proto, params, serverId, minutes) {
+  const server = await getServer(serverId);
+  let res;
+  try {
+    res = await apiCall(server.domain, server.auth, 'trial' + proto, params);
+  } catch (e) {
+    try {
+      if (proto === 'ssh') {
+        return await doCreate('ssh', 'createssh',
+          { user: params.user, password: params.password, exp: '1', iplimit: params.iplimit }, serverId);
+      }
+      return await doCreate(proto, 'create' + proto,
+        { user: params.user, exp: '1', quota: params.quota, iplimit: params.iplimit }, serverId);
+    } catch (e2) { return e.message; }
+  }
+  if (!res || (res.status !== 'success' && res.status !== true)) {
+    return `❌ Gagal: ${res && (res.message || res.error) ? (res.message || res.error) : 'respons tidak valid'}`;
+  }
+  const d = res.data || {};
+  const names = { ssh: 'SSH', vmess: 'VMESS', vless: 'VLESS', trojan: 'TROJAN' };
+  let msg = trialHeader(names[proto] || proto.toUpperCase(), d, minutes);
+  if (proto === 'ssh') {
+    msg += `🔑 Password : \`${d.password || ''}\`\n\n` +
+      `💡 *Cara Pakai:*\n` +
+      `Isi Hostname dengan domain di atas, Username & Password sesuai akun ini.\n` +
+      `Untuk payload/bug SNI gunakan host sesuai operator kamu.\n`;
+  } else if (proto === 'vmess' || proto === 'vless') {
+    msg += `🔑 UUID : \`${d.uuid || ''}\`\n\n` + linkBlock(d, ['tls', 'none', 'http80']);
+  } else if (proto === 'trojan') {
+    msg += `🔑 Password : \`${d.uuid || ''}\`\n\n` + linkBlock(d, ['tls', 'none']);
+  }
+  return msg.trim();
+}
+
+async function trialssh(username, password, minutes, quota, ip, serverId) {
+  return doTrial('ssh',
+    { user: username, password: password || '', menit: String(minutes), quota: String(quota), iplimit: String(ip) },
+    serverId, minutes);
+}
+
+async function trialvmess(username, minutes, quota, ip, serverId) {
+  return doTrial('vmess',
+    { user: username, menit: String(minutes), quota: String(quota), iplimit: String(ip) },
+    serverId, minutes);
+}
+
+async function trialvless(username, minutes, quota, ip, serverId) {
+  return doTrial('vless',
+    { user: username, menit: String(minutes), quota: String(quota), iplimit: String(ip) },
+    serverId, minutes);
+}
+
+async function trialtrojan(username, minutes, quota, ip, serverId) {
+  return doTrial('trojan',
+    { user: username, menit: String(minutes), quota: String(quota), iplimit: String(ip) },
+    serverId, minutes);
+}
+
 async function createssh(username, password, exp, ip, serverId) {
   return doCreate('ssh', 'createssh',
     { user: username, password, exp: String(exp), iplimit: String(ip) }, serverId);
@@ -129,8 +200,8 @@ async function createvless(username, exp, quota, ip, serverId) {
     { user: username, exp: String(exp), quota: String(quota), iplimit: String(ip) }, serverId);
 }
 async function createtrojan(username, exp, quota, ip, serverId) {
-  return doCreate('trojan', 'creatrojan',
+  return doCreate('trojan', 'createtrojan',
     { user: username, exp: String(exp), quota: String(quota), iplimit: String(ip) }, serverId);
 }
 
-module.exports = { createssh, createvmess, createvless, createtrojan };
+module.exports = { createssh, createvmess, createvless, createtrojan, trialssh, trialvmess, trialvless, trialtrojan };

@@ -752,7 +752,8 @@ def main(argv):
         elif cmd == "trial" and len(argv) >= 5:
             res = do_trial(argv[2], argv[3], argv[4],
                            float(argv[5]) if len(argv) > 5 else 1,
-                           int(argv[6]) if len(argv) > 6 else 1)
+                           int(argv[6]) if len(argv) > 6 else 1,
+                           argv[7] if len(argv) > 7 else None)
         elif cmd == "renew" and len(argv) >= 5:
             res = do_renew(argv[2], argv[3], argv[4])
         elif cmd == "suspend" and len(argv) >= 4:

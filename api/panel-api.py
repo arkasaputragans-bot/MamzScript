@@ -126,6 +126,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(code, res)
             if path == f"create{proto}":
                 return self.handle_create(proto, q)
+            if path == f"trial{proto}":
+                return self.handle_trial(proto, q)
             if path == f"check{proto}":
                 return self.handle_simple("check", proto, q)
             if path == f"delete{proto}":
@@ -221,6 +223,33 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"status": "success",
                                     "message": f"{names[proto]} account successfully created",
                                     "data": d})
+        return self._send(500, {"status": "error", "message": res.get("message")})
+
+    def handle_trial(self, proto, q):
+        user = q.get("user", "")
+        if not user:
+            return self._send(400, {"error": "Username diperlukan"})
+        try:
+            m = int(q.get("menit", "60"))
+        except ValueError:
+            return self._send(400, {"error": "menit harus angka"})
+        if m < 1 or m > 1440:
+            return self._send(400, {"error": "menit harus 1-1440"})
+        quota = q.get("quota", "1")
+        iplimit = q.get("iplimit", "1")
+        args = ["trial", proto, user, str(m), quota, iplimit]
+        custom = q.get("password", "") or q.get("uuid", "")
+        if custom:
+            args.append(custom)
+        res = vpnctl(*args)
+        if res.get("status") == "success":
+            d = enrich(res.get("data", {}))
+            out = {"status": "success",
+                   "message": res.get("message") or f"Trial {proto} {m} menit dibuat",
+                   "data": d, "trial_minutes": m}
+            if res.get("trial_warning"):
+                out["trial_warning"] = res["trial_warning"]
+            return self._send(200, out)
         return self._send(500, {"status": "error", "message": res.get("message")})
 
     def handle_simple(self, action, proto, q):
