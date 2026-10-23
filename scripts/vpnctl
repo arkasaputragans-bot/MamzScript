@@ -136,7 +136,7 @@ def meta_read(proto, user):
 
 
 def meta_delete(proto, user):
-    for suffix in ("", "IP"):
+    for suffix in ("", "IP", ".suspended"):
         try:
             os.remove(os.path.join(META_DIR[proto], user + suffix))
         except OSError:
@@ -459,6 +459,7 @@ def do_check(proto, user):
     quota, iplimit = meta_read(proto, user)
     data = {"username": user, "expired": exp,
             "quota": quota, "ip_limit": iplimit,
+            "suspended": is_suspended(proto, user),
             "domain": get_domain(), "pubkey": get_pubkey()}
     if proto == "ssh":
         data["password"] = secret
@@ -713,7 +714,7 @@ def do_resync():
                 continue
             changed = False
             for user, (exp, secret) in users.items():
-                if not secret:
+                if not secret or is_suspended(proto, user):
                     skipped += 1
                     continue
                 found = False

@@ -15,6 +15,8 @@ Endpoint:
   /check<proto>?user=&auth=
   /delete<proto>?user=&auth=
   /renew<proto>?user=&exp=&auth=
+  /lock<proto>?user=&auth=    (bekukan akun; data & masa aktif tetap)
+  /unlock<proto>?user=&auth=  (aktifkan lagi akun yang di-lock)
 """
 import json
 import os
@@ -134,6 +136,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.handle_simple("delete", proto, q)
             if path == f"renew{proto}":
                 return self.handle_simple("renew", proto, q)
+            if path == f"lock{proto}":
+                return self.handle_simple("suspend", proto, q)
+            if path == f"unlock{proto}":
+                return self.handle_simple("unsuspend", proto, q)
         self._send(404, {"status": "error", "message": "unknown endpoint"})
 
     def handle_servers(self, action, q):
