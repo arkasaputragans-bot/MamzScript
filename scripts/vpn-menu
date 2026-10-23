@@ -494,9 +494,20 @@ def setting_bot():
             import importlib.util as _ilu
             if _ilu.find_spec("telegram") is None:
                 print("  📦 python-telegram-bot belum ada, menginstall...")
-                subprocess.run(["pip3", "install", "--break-system-packages",
-                                "--ignore-installed", "python-telegram-bot>=20"],
-                               capture_output=True, text=True)
+                # pip lama (Ubuntu 22.04) tidak kenal --break-system-packages;
+                # coba pakai flag dulu, fallback tanpa flag.
+                _r = subprocess.run(["pip3", "install", "--break-system-packages",
+                                     "--ignore-installed", "python-telegram-bot>=20"],
+                                    capture_output=True, text=True)
+                if _r.returncode != 0:
+                    subprocess.run(["pip3", "install", "--ignore-installed",
+                                    "python-telegram-bot>=20"],
+                                   capture_output=True, text=True)
+                import importlib as _il
+                _il.invalidate_caches()
+                if _ilu.find_spec("telegram") is None:
+                    print("  ⚠️ python-telegram-bot MASIH gagal terpasang — bot belum akan jalan.")
+                    print("     Coba manual: pip3 install --ignore-installed 'python-telegram-bot>=20'")
         except Exception:
             pass
         subprocess.run(["systemctl", "enable", "--now", "panel-bot"],

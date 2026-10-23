@@ -295,8 +295,12 @@ mkdir -p /etc/vpn-panel
 [ -f /etc/vpn-panel/bot.env ] || printf "# Isi dengan token dari @BotFather dan ID Telegram admin\nBOT_TOKEN=\nADMIN_IDS=\n" > /etc/vpn-panel/bot.env
 chmod 600 /etc/vpn-panel/bot.env
 if ! python3 -c "import telegram" 2>/dev/null; then
-  pip3 install --break-system-packages "python-telegram-bot>=20" 2>&1 | tail -2 \
-    || pip3 install --break-system-packages --ignore-installed "python-telegram-bot>=20" 2>&1 | tail -2
+  # pip lama (Ubuntu 22.04, pip <= 22) tidak kenal --break-system-packages,
+  # sedangkan Debian 12+ (externally-managed) justru mewajibkannya.
+  # Urutan: pakai flag -> tanpa flag -> paksa --ignore-installed.
+  pip3 install --break-system-packages "python-telegram-bot>=20" 2>/dev/null \
+    || pip3 install "python-telegram-bot>=20" \
+    || pip3 install --ignore-installed "python-telegram-bot>=20"
 fi
 python3 -c "import telegram" 2>/dev/null \
   && echo "  python-telegram-bot OK" \
