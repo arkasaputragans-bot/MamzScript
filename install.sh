@@ -295,12 +295,20 @@ mkdir -p /etc/vpn-panel
 [ -f /etc/vpn-panel/bot.env ] || printf "# Isi dengan token dari @BotFather dan ID Telegram admin\nBOT_TOKEN=\nADMIN_IDS=\n" > /etc/vpn-panel/bot.env
 chmod 600 /etc/vpn-panel/bot.env
 if ! python3 -c "import telegram" 2>/dev/null; then
-  # pip lama (Ubuntu 22.04, pip <= 22) tidak kenal --break-system-packages,
-  # sedangkan Debian 12+ (externally-managed) justru mewajibkannya.
-  # Urutan: pakai flag -> tanpa flag -> paksa --ignore-installed.
-  pip3 install --break-system-packages "python-telegram-bot>=20" 2>/dev/null \
+  # Ubuntu 24.04 (pip 24, PEP 668) butuh BOTH flag sekaligus: --break-system-packages
+  # (lewati externally-managed) + --ignore-installed (hindari uninstall typing_extensions
+  # milik distro yang bikin percobaan pertama gagal diam-diam). Tanpa kombinasi ini,
+  # ketiga percobaan lama gagal semua dan `set -e` membunuh installer di tengah
+  # langkah 8 (panel-api & vpn-quota tidak pernah di-enable) — kejadian di box
+  # RexyHost baru 2026-10-24.
+  # Urutan: kombinasi -> flag saja -> tanpa flag -> ignore saja. `|| true` di akhir
+  # supaya gagal pasang PTB tidak pernah lagi menggagalkan sisa installer
+  # (panel-api & vpn-quota tidak butuh PTB; hanya panel-bot yang butuh).
+  pip3 install --break-system-packages --ignore-installed "python-telegram-bot>=20" 2>/dev/null \
+    || pip3 install --break-system-packages "python-telegram-bot>=20" 2>/dev/null \
     || pip3 install "python-telegram-bot>=20" \
-    || pip3 install --ignore-installed "python-telegram-bot>=20"
+    || pip3 install --ignore-installed "python-telegram-bot>=20" \
+    || true
 fi
 python3 -c "import telegram" 2>/dev/null \
   && echo "  python-telegram-bot OK" \
