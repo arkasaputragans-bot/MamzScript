@@ -17,7 +17,9 @@ Endpoint:
   /renew<proto>?user=&exp=&auth=
   /lock<proto>?user=&auth=    (bekukan akun; data & masa aktif tetap)
   /unlock<proto>?user=&auth=  (aktifkan lagi akun yang di-lock)
+  /slowdns  (detail SlowDNS aktif: nameserver + public key, untuk struk akun SSH)
 """
+import base64
 import json
 import os
 import subprocess
@@ -51,6 +53,44 @@ def read_meta(name):
         return ""
 
 
+SLOWDNS_DIR = "/etc/mamzpanel/slowdns"
+
+
+def slowdns_details():
+    """Detail SlowDNS aktif untuk struk akun SSH (None bila belum aktif).
+
+    Baca config.json + server.pub; aktif = config enabled + service
+    mamz-slowdns jalan. Kunci PUBLIK saja (hex + base32) — private key
+    (server.key) tidak pernah dibaca.
+    """
+    try:
+        with open(f"{SLOWDNS_DIR}/config.json") as f:
+            cfg = json.load(f)
+        if cfg.get("format") != 1 or not cfg.get("enabled"):
+            return None
+        ns, domain = cfg.get("ns", ""), cfg.get("domain", "")
+        if not ns or not domain or ns == domain:
+            return None
+        with open(f"{SLOWDNS_DIR}/server.pub") as f:
+            hexkey = f.read().strip()
+        raw = bytes.fromhex(hexkey)
+        if len(raw) != 32:
+            return None
+        r = subprocess.run(["systemctl", "is-active", "--quiet",
+                            "mamz-slowdns"], capture_output=True, timeout=5)
+        if r.returncode != 0:
+            return None
+        return {"nameserver": domain,
+                "ns_host": ns,
+                "pubkey_hex": hexkey,
+                "pubkey_base32": base64.b32encode(raw).decode(),
+                "engine": cfg.get("engine", "mamz"),
+                "record_type": cfg.get("record_type", "auto"),
+                "resolver": "1.1.1.1"}
+    except Exception:
+        return None
+
+
 def vpnctl(*args):
     p = subprocess.run([VPNCTL, *args], capture_output=True, text=True, timeout=120)
     try:
@@ -59,12 +99,17 @@ def vpnctl(*args):
         return {"status": "error", "message": p.stderr.strip() or "vpnctl gagal"}
 
 
-def enrich(data):
+def enrich(data, proto=None):
     """Tambahkan field domain/ns_domain/city/pubkey seperti API asli."""
     data.setdefault("domain", read_meta("domain"))
     data.setdefault("ns_domain", read_meta("ns_domain"))
     data.setdefault("city", read_meta("city"))
     data.setdefault("pubkey", read_meta("pubkey"))
+    # SlowDNS hanya untuk SSH (upstream tunnel = Dropbear).
+    if proto == "ssh":
+        sd = slowdns_details()
+        if sd:
+            data["slowdns"] = sd
     return data
 
 
@@ -112,6 +157,8 @@ class Handler(BaseHTTPRequestHandler):
         # meneruskan path apa adanya tanpa strip prefix).
         if path == "api" or path.startswith("api/"):
             path = path[3:].strip("/")
+        if path == "slowdns":
+            return self.handle_slowdns()
         if path == "status":
             return self.handle_status()
         if path == "servers":
@@ -141,6 +188,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == f"unlock{proto}":
                 return self.handle_simple("unsuspend", proto, q)
         self._send(404, {"status": "error", "message": "unknown endpoint"})
+
+    def handle_slowdns(self):
+        """Detail SlowDNS aktif (untuk struk akun / pengecekan)."""
+        sd = slowdns_details()
+        if not sd:
+            return self._send(200, {"status": "success",
+                                    "data": {"active": False}})
+        return self._send(200, {"status": "success",
+                                "data": {"active": True, **sd}})
 
     def handle_servers(self, action, q):
         """Kelola DB Server (skema identik: id, domain, auth)."""
@@ -209,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "Username, expiry, iplimit, dan password diperlukan"})
             res = vpnctl("create", "ssh", user, exp, "0", iplimit, password)
             if res.get("status") == "success":
-                d = enrich(res["data"])
+                d = enrich(res["data"], "ssh")
                 return self._send(200, {"status": "success",
                                         "message": "SSH account successfully created",
                                         "data": d})
@@ -223,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
             args.append(custom)
         res = vpnctl(*args)
         if res.get("status") == "success":
-            d = enrich(res["data"])
+            d = enrich(res["data"], proto)
             names = {"vmess": "Vmess", "vless": "Vless",
                      "trojan": "Trojan", "shadowsocks": "Shadowsocks"}
             return self._send(200, {"status": "success",
@@ -249,7 +305,7 @@ class Handler(BaseHTTPRequestHandler):
             args.append(custom)
         res = vpnctl(*args)
         if res.get("status") == "success":
-            d = enrich(res.get("data", {}))
+            d = enrich(res.get("data", {}), proto)
             out = {"status": "success",
                    "message": res.get("message") or f"Trial {proto} {m} menit dibuat",
                    "data": d, "trial_minutes": m}

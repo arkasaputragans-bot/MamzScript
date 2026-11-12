@@ -154,6 +154,34 @@ def pause():
     input("\n  [Enter untuk lanjut]")
 
 
+def slowdns_detail():
+    """Detail SlowDNS aktif untuk struk akun SSH (None bila belum aktif).
+
+    Baca config.json + server.pub lokal; aktif = config enabled +
+    service mamz-slowdns jalan. Kunci PUBLIK saja — server.key tidak
+    pernah dibaca.
+    """
+    try:
+        with open("/etc/mamzpanel/slowdns/config.json") as f:
+            cfg = json.load(f)
+        if cfg.get("format") != 1 or not cfg.get("enabled"):
+            return None
+        ns, domain = cfg.get("ns", ""), cfg.get("domain", "")
+        if not ns or not domain or ns == domain:
+            return None
+        with open("/etc/mamzpanel/slowdns/server.pub") as f:
+            hexkey = f.read().strip()
+        if len(bytes.fromhex(hexkey)) != 32:
+            return None
+        r = subprocess.run(["systemctl", "is-active", "--quiet", "mamz-slowdns"],
+                           capture_output=True, timeout=5)
+        if r.returncode != 0:
+            return None
+        return {"ns": ns, "domain": domain, "pubkey_hex": hexkey}
+    except Exception:
+        return None
+
+
 def tampil_akun(proto, data):
     print("\n  " + "─" * 42)
     print(f"  🌟 AKUN {LABEL[proto]} BERHASIL DIBUAT 🌟")
@@ -164,6 +192,12 @@ def tampil_akun(proto, data):
         print(f"   🔑 Password  : {data.get('password')}")
         print("   🔌 Port SSH  : 22, 143, 109")
         print("   📡 SSH-WS    : port 80, path /ssh-ws")
+        sd = slowdns_detail()
+        if sd:
+            print("   🐢 SlowDNS (SSH lewat DNS — HTTP Custom)")
+            print(f"   Nameserver : {sd['domain']}")
+            print(f"   Public key : {sd['pubkey_hex']}")
+            print("   Resolver   : 1.1.1.1 | Type : Auto")
     else:
         print(f"   🆔 UUID      : {data.get('uuid')}")
         print("   🔌 Port TLS  : 443   |  non-TLS : 80")
