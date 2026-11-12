@@ -1,0 +1,10 @@
+[Unit]
+Description=MamzPanel SlowDNS configuration recovery
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/mamzpanel/slowdns/config.json
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/slowdns-manager.py reconcile
+TimeoutStartSec=300
+UMask=0077

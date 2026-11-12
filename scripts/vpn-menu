@@ -5,6 +5,7 @@ Jalankan:  menu
 Tinggal pilih nomor, jawab yang ditanya, beres.
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ PROTOS = ["ssh", "vmess", "vless", "trojan", "shadowsocks"]
 LABEL = {"ssh": "SSH", "vmess": "VMess", "vless": "VLESS",
          "trojan": "Trojan", "shadowsocks": "Shadowsocks"}
 VPNCTL = "/usr/local/bin/vpnctl"
+SLOWDNS = "/usr/local/bin/slowdns-manager.py"
 META_FILES = {"domain": "/etc/xray/domain", "ns_domain": "/etc/xray/ns_domain",
               "city": "/etc/xray/city", "isp": "/etc/xray/isp"}
 API_KEY_FILE = "/etc/xray/api.key"
@@ -331,7 +333,8 @@ def menu_status():
     print()
     for s in ["xray@edge", "xray@vmess", "xray@vless", "xray@trojan",
               "xray@shadowsocks", "haproxy", "nginx", "dropbear",
-              "vpn-ws", "panel-api", "vpn-quota", "panel-bot"]:
+              "vpn-ws", "panel-api", "vpn-quota", "panel-bot",
+              "mamz-slowdns"]:
         p = subprocess.run(["systemctl", "is-active", s],
                            capture_output=True, text=True)
         st = p.stdout.strip()
@@ -353,10 +356,11 @@ def menu_pengaturan():
         print("   5. 🔑 Lihat / ganti API key")
         print("   6. 🔄 Restart service VPN")
         print("   7. 💾 Backup & Restore")
+        print("   8. 🐢 SlowDNS (SSH lewat DNS)")
         print("   0. Kembali")
         print("  " + "-" * 42)
         v = ask("Pilih").strip()
-        if v in ("0", "1", "2", "3", "4", "5", "6", "7", "9"):
+        if v in ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"):
             salah = 0
         if v == "1":
             domain_tls_allinone()
@@ -372,11 +376,13 @@ def menu_pengaturan():
             restart_services()
         elif v == "7":
             menu_backup()
+        elif v == "8":
+            menu_slowdns()
         elif v == "0":
             return
         else:
             salah += 1
-            print("  ❌ Pilih 0-7.")
+            print("  ❌ Pilih 0-8.")
             if salah >= 5:
                 print("  ⚠️ Kebanyakan input salah.")
                 print("  💡 Jangan paste teks ke dalam menu — ketik angkanya saja, lalu Enter.")
@@ -582,6 +588,130 @@ def restart_services():
     for s in svcs:
         subprocess.run(["systemctl", "restart", s], capture_output=True)
     print("  ✅ Semua service direstart.")
+    pause()
+
+
+# ---------------- SLOWDNS (SSH lewat DNS, HTTP Custom) ----------------
+
+def slowdns_jalankan(*args):
+    """Jalankan manager SlowDNS, kembalikan (returncode, stdout, stderr)."""
+    try:
+        # Panggil lewat python3 eksplisit (manager boleh tidak +x di repo;
+        # installer memasangnya 755). Pola yang sama dipakai unit network.
+        p = subprocess.run(["python3", SLOWDNS, *args], capture_output=True,
+                           text=True, timeout=180)
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except OSError:
+        return 1, "", "manager SlowDNS belum terpasang (jalankan install.sh langkah SlowDNS)"
+
+
+def slowdns_ip():
+    """IP publik VPS dari cache netinfo; kalau kosong, minta ketik."""
+    ip = netinfo().get("ip", "")
+    if ip:
+        return ip
+    return ask("IP publik VPS ini")
+
+
+def menu_slowdns():
+    while True:
+        rc, out, _ = slowdns_jalankan("status")
+        print("\n  🐢 SLOWDNS (SSH lewat DNS — HTTP Custom)")
+        print("  " + (out.replace("\n", "\n  ") if out else "(manager belum terpasang)"))
+        print("   1. Setup nameserver")
+        print("   2. Aktifkan SlowDNS SSH")
+        print("   3. Detail + public key")
+        print("   4. Nonaktifkan")
+        print("   5. Mode DNS (tipe record)")
+        print("   0. Kembali")
+        print("  " + "-" * 42)
+        v = ask("Pilih").strip()
+        if v == "1":
+            slowdns_setup()
+        elif v == "2":
+            slowdns_aktifkan()
+        elif v == "3":
+            rc, out, _ = slowdns_jalankan("details")
+            print(out or "  Belum dikonfigurasi.")
+            pause()
+        elif v == "4":
+            slowdns_nonaktifkan()
+        elif v == "5":
+            slowdns_mode()
+        elif v == "0":
+            return
+        else:
+            print("  ❌ Pilih 0-5.")
+
+
+def slowdns_setup():
+    print("\n  Setup nameserver SlowDNS")
+    print("  Nameserver = hostname yang menjawab query DNS (punya 'ns',")
+    print("               mis. ns1-domainmu.my.id).")
+    print("  Domain tunnel = suffix query HC (mis. ns-domainmu.my.id).")
+    ns = ask("Nameserver (mis. ns1-sgdo7.mamzvpn.my.id)")
+    domain = ask("Domain tunnel (mis. ns-sgdo7.mamzvpn.my.id)")
+    if not ns or not domain:
+        print("  ❌ Nameserver dan domain tunnel wajib diisi.")
+        pause()
+        return
+    ip = slowdns_ip()
+    if not ip:
+        print("  ❌ IP publik tidak terdeteksi.")
+        pause()
+        return
+    print("  ⏳ Menyimpan konfigurasi...")
+    rc, out, err = slowdns_jalankan("setup-manual", ns, domain, ip)
+    print("  " + (out or err).replace("\n", "\n  "))
+    if rc == 0:
+        print("\n  Buat 2 record ini di DNS domainmu (DNS only):")
+        print(f"   • A  {ns} -> {ip}")
+        print(f"   • NS {domain} -> {ns}")
+        print("  JANGAN buat record A di domain tunnel itu sendiri.")
+    pause()
+
+
+def slowdns_aktifkan():
+    ip = slowdns_ip()
+    if not ip:
+        print("  ❌ IP publik tidak terdeteksi.")
+        pause()
+        return
+    print(f"  Mengaktifkan SlowDNS SSH (IP {ip})...")
+    print("  Pastikan record A + NS di atas sudah dibuat & terdelegasi,")
+    print("  dan Dropbear :143 hidup. Kalau gagal, pesannya menjelaskan.")
+    rc, out, err = slowdns_jalankan("start", "ssh", ip)
+    print("  " + (out or err).replace("\n", "\n  "))
+    pause()
+
+
+def slowdns_nonaktifkan():
+    yakin = ask("Nonaktifkan SlowDNS? (y/n)", "n")
+    if yakin.lower() != "y":
+        print("  Dibatalkan.")
+        return
+    rc, out, err = slowdns_jalankan("stop")
+    print("  " + (out or err).replace("\n", "\n  "))
+    pause()
+
+
+def slowdns_mode():
+    print("\n  Mode DNS (tipe record SlowDNS)")
+    print("  Auto = semua 6 tipe (bawaan, yang dipilih kalibrasi HC).")
+    print("  Paksa satu tipe bila Auto bermasalah di jaringan tertentu.")
+    print("   0. Auto (bawaan)")
+    print("   1. TXT   2. NULL   3. CNAME   4. NS   5. MX   6. SRV")
+    v = ask("Pilih (0-6)").strip()
+    names = {"0": "auto", "1": "txt", "2": "null", "3": "cname",
+             "4": "ns", "5": "mx", "6": "srv"}
+    if v not in names:
+        print("  ❌ Pilih 0-6.")
+        pause()
+        return
+    rc, out, err = slowdns_jalankan("set-record-type", names[v])
+    print("  " + (out or err).replace("\n", "\n  "))
+    if rc == 0:
+        print("  Berlaku langsung bila layanan aktif (unit ditulis ulang + restart).")
     pause()
 
 

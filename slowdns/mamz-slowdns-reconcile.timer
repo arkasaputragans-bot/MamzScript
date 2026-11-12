@@ -1,0 +1,9 @@
+[Unit]
+Description=Check MamzPanel SlowDNS recovery
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=5m
+RandomizedDelaySec=20s
+Persistent=true
+[Install]
+WantedBy=timers.target

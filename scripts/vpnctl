@@ -622,6 +622,20 @@ def do_restore(tar_path):
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "wb") as out:
                 shutil.copyfileobj(f, out)
+    # Kunci SlowDNS hasil restore: kembalikan mode ketatnya. Restore
+    # menulis file via open(), bukan tar.extract(), sehingga mode dari
+    # arsip tidak terbawa — tanpa ini server.key jadi 0644 (terbaca
+    # semua). Manager memvalidasi isi kunci, bukan modenya, jadi ini
+    # harus diperbaiki di sini, sekali, saat restore.
+    for _rel, _mode in (
+            ("etc/mamzpanel/slowdns", 0o700),
+            ("etc/mamzpanel/slowdns/config.json", 0o600),
+            ("etc/mamzpanel/slowdns/server.key", 0o600),
+            ("etc/mamzpanel/slowdns/server.pub", 0o600)):
+        try:
+            os.chmod(os.path.join("/", _rel), _mode)
+        except OSError:
+            pass
     counts = {}
     for proto in PROTOS:
         # pakai db_read (parser yang sama dengan resync) biar konsisten;

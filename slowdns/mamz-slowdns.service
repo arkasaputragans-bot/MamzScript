@@ -1,0 +1,31 @@
+# Template unit layanan SlowDNS MamzPanel.
+#
+# JANGAN salin file ini mentah-mentah ke /etc/systemd/system/ — unit
+# aktif DI-RENDER oleh slowdns-manager.py saat `start` (domain tunnel
+# dan upstream dimasukkan dari config.json di /etc/mamzpanel/slowdns/).
+# File ini hanya referensi bentuk unit yang dihasilkan manager.
+# __SLOWDNS_DOMAIN__   = domain tunnel, mis. ns-sgdo7.mamzvpn.my.id
+# __SLOWDNS_UPSTREAM__ = upstream SSH, MamzScript: 127.0.0.1:143 (Dropbear)
+[Unit]
+Description=MamzPanel SlowDNS (ssh)
+After=network-online.target mamz-slowdns-network.service dropbear.service
+Wants=network-online.target
+Requires=mamz-slowdns-network.service
+[Service]
+User=mamzslowdns
+Group=mamzslowdns
+StateDirectory=mamz-slowdns
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/mamz-slowdns-server -record-type auto -mtu 1232 -udp 0.0.0.0:5300 -privkey-file /var/lib/mamz-slowdns/server.key __SLOWDNS_DOMAIN__ __SLOWDNS_UPSTREAM__
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=128M
+TasksMax=64
+LimitNOFILE=4096
+[Install]
+WantedBy=multi-user.target

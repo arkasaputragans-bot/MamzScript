@@ -8,8 +8,14 @@ Isi backup (relatif terhadap /):
   MANIFEST.txt (info + jumlah akun per protokol).
 
 TIDAK ikut: api.key, bot.env, *.crt, *.key, config.json (bisa
-dibangun ulang via `vpnctl resync`).
+dibangun ulang via `vpnctl resync`) — KECUALI kunci + config SlowDNS
+di bawah (pengecualian eksplisit agar kunci ikut ter-restore).
 IKUT: etc/shadow (hash password SSH) agar restore pakai password lama.
+IKUT (pengecualian atas permintaan pemilik, 11 Nov 2026): config +
+kunci SlowDNS etc/mamzpanel/slowdns/ (config.json, server.key,
+server.pub) agar public key tetap sama saat pindah VPS trial.
+Karena server.key adalah private key, backup ini HANYA untuk
+lingkungan sendiri, jangan disebar — sama seperti etc/shadow.
 Hanya untuk lingkungan sendiri.
 
 Hasil: /var/backups/vpn-panel/backup-YYYYMMDD-HHMMSS.tar.gz (rotasi: 7 terakhir).
@@ -44,6 +50,19 @@ BACKUP_PATHS = [
 ]
 EXCLUDE_SUFFIX = (".crt", ".key")
 EXCLUDE_NAMES = {"api.key", "bot.env", "config.json", "netinfo.json"}
+
+# Kunci + config SlowDNS — PENGECUALIAN EKSPLISIT dari should_exclude.
+# Alasan (permintaan pemilik, 11 Nov 2026): pemilik sering ganti VPS
+# trial; tanpa ini, tiap pindah VPS kunci publik berubah dan semua
+# pelanggan HC harus update kunci. Dengan ini, restore backup di VPS
+# baru memulihkan kunci yang sama (public key tetap) — yang berubah
+# hanya record A nameserver ke IP baru. server.key adalah private key:
+# backup ini hanya untuk lingkungan sendiri, JANGAN disebar.
+SLOWDNS_FILES = [
+    "etc/mamzpanel/slowdns/config.json",
+    "etc/mamzpanel/slowdns/server.key",
+    "etc/mamzpanel/slowdns/server.pub",
+]
 
 
 def log(msg):
@@ -105,6 +124,9 @@ def build_tarball(dest):
         f"Format  : kompatibel FighterTunnel (### user expired [secret])\n"
         f"Akun    : " + ", ".join(f"{p}={c}" for p, c in counts.items()) + "\n"
         f"Total   : {sum(counts.values())} akun\n"
+        f"SlowDNS : " + ("ya (config + kunci ikut)\n" if os.path.isfile(
+            "/etc/mamzpanel/slowdns/server.key")
+            else "tidak dikonfigurasi\n")
     )
     with tempfile.TemporaryDirectory() as tmp:
         mf = os.path.join(tmp, "MANIFEST.txt")
@@ -126,6 +148,13 @@ def build_tarball(dest):
                 else:
                     if not should_exclude(full):
                         tar.add(full, arcname=rel)
+            # Kunci + config SlowDNS: ditambah eksplisit TANPA
+            # should_exclude — server.key berakhiran .key dan config.json
+            # bernama config.json, keduanya disaring filter umum.
+            for rel in SLOWDNS_FILES:
+                full = os.path.join("/", rel)
+                if os.path.isfile(full):
+                    tar.add(full, arcname=rel)
     return counts
 
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=MamzPanel SlowDNS owned firewall rules
+After=network-online.target
+Before=mamz-slowdns.service
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/bin/python3 /usr/local/bin/slowdns-manager.py firewall start
+ExecStop=/usr/bin/python3 /usr/local/bin/slowdns-manager.py firewall stop
+[Install]
+WantedBy=multi-user.target

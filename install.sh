@@ -13,7 +13,8 @@
 #   7. vpnctl (provisioning akun, format DB identik dgn FighterTunnel)
 #   8. panel-api.py (:5888) + panel-bot.py (butuh BOT_TOKEN)
 #   9. vpn-quota (enforcement kuota & expiry)
-#  10. Web admin UI di http://IP-SERVER:81/panel/
+#  10. SlowDNS (SSH lewat DNS — HTTP Custom; engine mamz dibangun dari source, Go >= 1.21)
+#  11. Web admin UI di http://IP-SERVER:81/panel/
 # ============================================================
 set -e
 cd "$(dirname "$0")"
@@ -22,14 +23,14 @@ log() { echo -e "\n=== $1 ==="; }
 DOMAIN="${DOMAIN:-}"
 echo "DOMAIN=${DOMAIN:-<belum diisi>}"
 
-log "[1/10] Paket base"
+log "[1/11] Paket base"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq haproxy nginx curl wget unzip python3 \
   python3-pip sqlite3 cron iptables iproute2 dnsutils socat netcat-openbsd \
   cmake build-essential git zlib1g-dev bzip2 at
 
-log "[2/10] Xray-core"
+log "[2/11] Xray-core"
 if [ ! -x /usr/local/bin/xray ]; then
   (cd /tmp
   wget -q -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
@@ -164,7 +165,7 @@ if [ "$EDGE_CATCHALL" = "YES" ]; then
   systemctl restart xray@edge
 fi
 
-log "[3/10] HAProxy + nginx"
+log "[3/11] HAProxy + nginx"
 cp haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg
 haproxy -c -f /etc/haproxy/haproxy.cfg
 # bersihkan SEMUA site nginx lama, hanya panel.conf yang dipakai
@@ -185,7 +186,7 @@ systemctl reset-failed haproxy || true
 systemctl restart haproxy
 systemctl is-active haproxy nginx
 
-log "[4/10] Dropbear 2019.78 + ws.py"
+log "[4/11] Dropbear 2019.78 + ws.py"
 grep -qE "^/bin/false$" /etc/shells || echo "/bin/false" >> /etc/shells
 grep -qE "^/usr/sbin/nologin$" /etc/shells || echo "/usr/sbin/nologin" >> /etc/shells
 # Dropbear 2019.78 dari source (standar script komunitas, ganti versi distro)
@@ -235,7 +236,7 @@ systemctl daemon-reload
 systemctl enable vpn-ws vpn-mux dropbear
 systemctl restart vpn-ws vpn-mux dropbear
 
-log "[5/10] badvpn-udpgw (opsional)"
+log "[5/11] badvpn-udpgw (opsional)"
 if [ ! -x /usr/local/bin/badvpn-udpgw ]; then
   (cd /tmp && rm -rf badvpn badvpn.tar.gz
    wget -q -O badvpn.tar.gz https://github.com/ambrop72/badvpn/archive/refs/heads/master.tar.gz
@@ -262,7 +263,7 @@ EOF
   systemctl enable --now badvpn
 fi
 
-log "[6/10] acme.sh"
+log "[6/11] acme.sh"
 if [ ! -x /root/.acme.sh/acme.sh ]; then
   curl -s https://get.acme.sh | sh -s email=admin@localhost >/dev/null 2>&1 || true
 fi
@@ -270,7 +271,7 @@ fi
 [ -x /root/.acme.sh/acme.sh ] && /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
 [ -x /root/.acme.sh/acme.sh ] && echo "acme.sh OK (CA: Let's Encrypt; issue via menu > 8.Pengaturan > 1)"
 
-log "[7/10] vpnctl (provisioning) + menu (menu terminal)"
+log "[7/11] vpnctl (provisioning) + menu (menu terminal)"
 install -m 755 scripts/vpnctl /usr/local/bin/vpnctl
 install -m 755 scripts/vpn-menu /usr/local/bin/vpn-menu
 ln -sf /usr/local/bin/vpn-menu /usr/local/bin/menu
@@ -285,7 +286,7 @@ if [ ! -f /etc/cron.d/vpn-backup ]; then
   chmod 644 /etc/cron.d/vpn-backup
 fi
 
-log "[8/10] API :5888 + bot Telegram"
+log "[8/11] API :5888 + bot Telegram"
 install -m 755 api/panel-api.py /usr/local/bin/panel-api.py
 install -m 755 bot/panel-bot.py /usr/local/bin/panel-bot.py
 cp systemd/panel-api.service systemd/panel-bot.service systemd/vpn-quota.service /etc/systemd/system/
@@ -324,13 +325,72 @@ else
   echo "bot Telegram BELUM dinyalakan (isi BOT_TOKEN di /etc/vpn-panel/bot.env dulu)"
 fi
 
-log "[9/10] Verifikasi service"
+log "[9/11] Verifikasi service"
 for s in xray@edge xray@vmess xray@vless xray@trojan xray@shadowsocks \
          haproxy nginx dropbear vpn-ws vpn-mux panel-api vpn-quota; do
   printf "%-18s %s\n" "$s" "$(systemctl is-active "$s")"
 done
 
-log "[10/10] SELESAI 🎉"
+log "[10/11] SlowDNS (SSH lewat DNS — HTTP Custom)"
+# Engine mamz (fork DNSTT bersih, CC0) — DIBANGUN dari source di
+# slowdns/src/mamz, BUKAN binary prebuilt. JANGAN timpa config/kunci
+# yang sudah ada: setup nameserver + aktivasi tetap lewat
+# menu > 8 > 8 SlowDNS. Langkah ini hanya memasang file + build.
+install -m 755 slowdns/slowdns-manager.py /usr/local/bin/slowdns-manager.py
+install -d -m 700 /etc/mamzpanel/slowdns /var/lib/mamz-slowdns
+install -d -m 755 /usr/local/lib/mamzpanel/slowdns
+# --- Go >= 1.21 (butuh untuk build engine) ---
+go_ok() {
+  command -v go >/dev/null 2>&1 || return 1
+  local v
+  v="$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')"
+  [ -n "$v" ] || return 1
+  [ "$(printf '1.21\n%s\n' "$v" | sort -V | head -n1)" = "1.21" ]
+}
+if ! go_ok; then
+  echo "  Go >= 1.21 belum ada — mencoba pasang lewat apt..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq golang-go 2>/dev/null || true
+  fi
+fi
+if ! go_ok; then
+  echo "  apt tidak menyediakan Go >= 1.21 — unduh Go resmi 1.27.4..."
+  GO_TGZ="go1.27.4.linux-amd64.tar.gz"
+  GO_SHA256="7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840"
+  (
+    cd /tmp && curl -fsSL -o "$GO_TGZ" "https://go.dev/dl/$GO_TGZ" && \
+    echo "$GO_SHA256  $GO_TGZ" | sha256sum -c - && \
+    rm -rf /usr/local/go && tar -C /usr/local -xzf "$GO_TGZ" && rm -f "$GO_TGZ"
+  ) || { echo "  ❌ Go gagal diunduh/dipasang — langkah SlowDNS dibatalkan"; exit 1; }
+  export PATH="/usr/local/go/bin:$PATH"
+fi
+go_ok || { echo "  ❌ Go >= 1.21 gagal dipasang — langkah SlowDNS dibatalkan"; exit 1; }
+echo "  Go: $(go version)"
+# --- Build engine mamz dari source (statis, tanpa CGO) ---
+(
+  cd slowdns/src/mamz && \
+  CGO_ENABLED=0 GOFLAGS=-mod=mod go build -trimpath \
+    -o /usr/local/bin/mamz-slowdns-server ./mamz-slowdns-server
+) || { echo "  ❌ Build engine mamz gagal — langkah SlowDNS dibatalkan"; exit 1; }
+chmod 755 /usr/local/bin/mamz-slowdns-server
+install -m 644 /usr/local/bin/mamz-slowdns-server /usr/local/lib/mamzpanel/slowdns/mamz-slowdns-server
+id mamzslowdns 2>/dev/null || useradd --system --user-group --no-create-home \
+  --home-dir /var/lib/mamz-slowdns --shell /usr/sbin/nologin mamzslowdns
+chown mamzslowdns:mamzslowdns /var/lib/mamz-slowdns
+# unit network + reconcile disalin apa adanya; unit layanan utama (mamz-slowdns.service)
+# DI-RENDER oleh manager saat aktivasi (domain tunnel dari config).
+cp slowdns/mamz-slowdns-network.service slowdns/mamz-slowdns-reconcile.service \
+   slowdns/mamz-slowdns-reconcile.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable mamz-slowdns-reconcile.timer 2>/dev/null || true
+# verifikasi: manager bisa compile + binary terpasang & terverifikasi
+python3 -m py_compile /usr/local/bin/slowdns-manager.py
+/usr/local/bin/slowdns-manager.py install
+echo "  SlowDNS terpasang (belum aktif — setup via menu > 8 > 8 SlowDNS)"
+printf "%-18s %s\n" "mamz-slowdns" \
+  "$(systemctl is-active mamz-slowdns 2>/dev/null || echo 'inactive (wajar, belum setup)')"
+
+log "[11/11] SELESAI 🎉"
 echo ""
 echo "API key server : $(cat /etc/xray/api.key)"
 echo "Web admin UI   : http://$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')/panel/"
@@ -339,5 +399,6 @@ echo ""
 echo "LANGKAH SELANJUTNYA (semua via perintah 'menu' > 8.Pengaturan, tanpa edit manual):"
 echo " 1. Set domain + TLS -> menu 8 > 1 (all-in-one)"
 echo " 2. Bot Telegram     -> menu 8 > 3 (isi BOT_TOKEN & ADMIN_IDS)"
+echo " 3. SlowDNS         -> menu 8 > 8 (isi nameserver + domain tunnel, buat record DNS, aktifkan)"
 echo ""
 echo "Ketik 'menu' kapan saja untuk buka menu."
