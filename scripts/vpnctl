@@ -59,6 +59,13 @@ API_PORT = {"vmess": 20001, "vless": 20002, "trojan": 20003, "shadowsocks": 2000
 DOMAIN_FILE = "/etc/xray/domain"
 PUBKEY_FILE = "/etc/xray/pubkey"
 
+# SlowDNS (SSH lewat DNS): config + kunci hasil restore tinggal di sini.
+SLOWDNS_DIR = "/etc/mamzpanel/slowdns"
+SLOWDNS_CONFIG = "/etc/mamzpanel/slowdns/config.json"
+SLOWDNS_MANAGER = "/usr/local/bin/slowdns-manager.py"
+SLOWDNS_SERVICE = "mamz-slowdns.service"
+SLOWDNS_NETWORK_SERVICE = "mamz-slowdns-network.service"
+
 
 def get_domain():
     try:
@@ -561,6 +568,87 @@ def do_restore_info(tar_path):
     return {"status": "success", "data": out}
 
 
+def _public_ip():
+    """IPv4 publik VPS ini (untuk aktivasi SlowDNS hasil restore)."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://ip-api.com/json/",
+                                    timeout=8) as r:
+            ip = json.loads(r.read().decode()).get("query", "")
+        if ip:
+            return ip
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import ipaddress
+        out = run(["hostname", "-I"]).stdout
+        for token in out.split():
+            try:
+                addr = ipaddress.IPv4Address(token)
+                if addr.is_global:
+                    return str(addr)
+            except ValueError:
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _slowdns_restore_activate():
+    """Hidupkan SlowDNS hasil restore (best-effort).
+
+    Backup yang dibuat saat SlowDNS aktif berisi config + kunci
+    (etc/mamzpanel/slowdns/); tanpa langkah ini layanan tetap mati
+    sesudah restore dan pemilik harus mengaktifkannya manual.
+    Kembalikan string status untuk data["slowdns"]: "active" bila
+    layanan jalan, "not configured" bila backup tidak membawa
+    SlowDNS, atau alasan bila aktivasi tidak jalan. Kegagalan di
+    sini TIDAK PERNAH menggagalkan restore — timer reconcile
+    (dipasang install.sh) akan mengaktifkan otomatis begitu DNS
+    menunjuk IP baru.
+    """
+    if not os.path.isfile(SLOWDNS_CONFIG):
+        return "not configured"
+    try:
+        with open(SLOWDNS_CONFIG) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return "config restored but unreadable"
+    if not cfg.get("enabled", False) or not cfg.get("auto_start", True):
+        return ("config restored but disabled in backup "
+                "(aktifkan manual dari menu SlowDNS)")
+    ip = _public_ip()
+    if not ip:
+        return "config restored but public IP not detected"
+    if os.path.isfile(SLOWDNS_MANAGER):
+        # Jalur yang sama seperti menu (Aktifkan SlowDNS): manager
+        # menulis ulang unit, memastikan kunci + firewall, lalu
+        # enable + start. Validasi DNS di dalamnya bisa gagal bila
+        # record A/NS belum menunjuk IP baru — dicatat di sini.
+        try:
+            r = run(["python3", SLOWDNS_MANAGER, "start", "ssh", ip],
+                    timeout=180)
+        except Exception as e:  # noqa: BLE001
+            return "config restored but activation failed: %s" % e
+        if r.returncode == 0:
+            return "active"
+        msg = (r.stdout.strip() or r.stderr.strip()).splitlines()
+        reason = msg[-1] if msg else "manager exit %d" % r.returncode
+        return "config restored but service failed to start: %s" % reason
+    # Manager tidak ada tapi unit layanan masih ada (install lama):
+    # nyalakan langsung tanpa validasi DNS.
+    units = [u for u in (SLOWDNS_NETWORK_SERVICE, SLOWDNS_SERVICE)
+             if os.path.isfile("/etc/systemd/system/" + u)]
+    if not units:
+        return ("config restored but manager not installed "
+                "(jalankan install.sh langkah SlowDNS)")
+    r = run(["systemctl", "enable", "--now"] + units)
+    if r.returncode == 0:
+        return "active"
+    return ("config restored but service failed to start: "
+            "systemctl exit %d" % r.returncode)
+
+
 def do_restore(tar_path):
     """Restore penuh dari file backup .tar.gz (buatan vpn-backup).
 
@@ -669,8 +757,13 @@ def do_restore(tar_path):
                 ssh_restored += 1
         if exp:
             run(["chage", "-E", exp, user])
+    # SlowDNS hasil restore: hidupkan otomatis bila backup-nya aktif.
+    # Best-effort — kegagalan aktivasi dicatat di data["slowdns"],
+    # restore tetap sukses.
+    slowdns_status = _slowdns_restore_activate()
     data = {"safety_dir": safety, "accounts": counts,
             "resync": resync.get("data", {})}
+    data["slowdns"] = slowdns_status
     if ssh_restored:
         data["ssh_password_restored"] = ssh_restored
     if ssh_new_passwords:

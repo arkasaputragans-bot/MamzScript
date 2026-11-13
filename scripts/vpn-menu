@@ -15,6 +15,7 @@ LABEL = {"ssh": "SSH", "vmess": "VMess", "vless": "VLESS",
          "trojan": "Trojan", "shadowsocks": "Shadowsocks"}
 VPNCTL = "/usr/local/bin/vpnctl"
 SLOWDNS = "/usr/local/bin/slowdns-manager.py"
+SLOWDNS_CONFIG = "/etc/mamzpanel/slowdns/config.json"
 META_FILES = {"domain": "/etc/xray/domain", "ns_domain": "/etc/xray/ns_domain",
               "city": "/etc/xray/city", "isp": "/etc/xray/isp"}
 API_KEY_FILE = "/etc/xray/api.key"
@@ -444,6 +445,30 @@ def domain_tls_allinone():
     else:
         print("  Sertifikat dilewati. Bisa dipasang kapan saja dari menu ini.")
         pause()
+    # SlowDNS ikut domain panel: bila belum dikonfigurasi sama sekali,
+    # tulis konfigurasinya dari domain ini (ns1-<domain> / ns-<domain>)
+    # supaya tidak perlu ketik manual di menu SlowDNS. Hanya menulis
+    # config (setup-manual tidak membuat kunci & tidak menyalakan
+    # layanan); kunci dibuat & layanan diaktifkan saat "Aktifkan"
+    # dipilih, atau otomatis saat restore. Config yang sudah ada
+    # TIDAK PERNAH ditimpa — kunci lama tetap berlaku.
+    if not os.path.exists(SLOWDNS_CONFIG):
+        ip = slowdns_ip()
+        if ip:
+            ns_auto = "ns1-" + cur
+            tun_auto = "ns-" + cur
+            rc, out, err = slowdns_jalankan("setup-manual", ns_auto,
+                                            tun_auto, ip)
+            if rc == 0:
+                print("\n  🐢 SlowDNS ikut domain panel (belum aktif):")
+                print(f"   • A  {ns_auto} -> {ip}")
+                print(f"   • NS {tun_auto} -> {ns_auto}")
+                print("  Buat 2 record di atas di DNS, lalu aktifkan dari")
+                print("  menu Pengaturan > SlowDNS > Aktifkan.")
+            else:
+                print("  ⚠️ SlowDNS gagal disiapkan otomatis: "
+                      + (out or err).replace("\n", "\n  "))
+            pause()
 
 
 def pasang_tls():
@@ -683,8 +708,14 @@ def slowdns_setup():
     print("  Nameserver = hostname yang menjawab query DNS (punya 'ns',")
     print("               mis. ns1-domainmu.my.id).")
     print("  Domain tunnel = suffix query HC (mis. ns-domainmu.my.id).")
-    ns = ask("Nameserver (mis. ns1-sgdo7.mamzvpn.my.id)")
-    domain = ask("Domain tunnel (mis. ns-sgdo7.mamzvpn.my.id)")
+    # Nama ikut domain panel (ns1-<domain> / ns-<domain>) — tinggal
+    # Enter untuk menerima, atau ketik lain bila mau beda. Bila domain
+    # panel belum diisi, tetap ditanya seperti dulu.
+    panel_domain = read_file(META_FILES["domain"])
+    ns = ask("Nameserver (mis. ns1-sgdo7.mamzvpn.my.id)",
+             "ns1-" + panel_domain if panel_domain else "")
+    domain = ask("Domain tunnel (mis. ns-sgdo7.mamzvpn.my.id)",
+                 "ns-" + panel_domain if panel_domain else "")
     if not ns or not domain:
         print("  ❌ Nameserver dan domain tunnel wajib diisi.")
         pause()
@@ -875,6 +906,9 @@ def backup_restore_lokal():
             if isinstance(info, dict) and "total" in info:
                 print(f"     • {proto}: {info['total']} akun "
                       f"({info.get('added', 0)} diaktifkan ulang)")
+        if d.get("slowdns") and d["slowdns"] != "not configured":
+            print("     🐢 SlowDNS: "
+                  + ("aktif" if d["slowdns"] == "active" else d["slowdns"]))
     else:
         print(f"  ❌ {r.get('message')}")
     pause()
